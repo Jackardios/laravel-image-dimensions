@@ -70,14 +70,14 @@ The `ImageDimensions` class provides static methods to get image dimensions. Eac
 
 ```php
 use Jackardios\ImageDimensions\Facades\ImageDimensions;
-use InvalidArgumentException;
+use Jackardios\ImageDimensions\Exceptions\ImageDimensionsException;
 
 // From a local file path
 try {
     $size = ImageDimensions::fromLocal('/path/to/your/image.jpg');
     echo "Width: " . $size['width']; // e.g., 1920
     echo "Height: " . $size['height']; // e.g., 1080
-} catch (InvalidArgumentException $e) {
+} catch (ImageDimensionsException $e) {
     echo "Error: " . $e->getMessage();
 }
 
@@ -86,7 +86,7 @@ try {
     $size = ImageDimensions::fromUrl('https://example.com/images/photo.png');
     echo "Width: " . $size['width'];
     echo "Height: " . $size['height'];
-} catch (InvalidArgumentException $e) {
+} catch (ImageDimensionsException $e) {
     echo "Error: " . $e->getMessage();
 }
 
@@ -96,7 +96,7 @@ try {
     $size = ImageDimensions::fromStorage('public', 'images/profile.gif');
     echo "Width: " . $size['width'];
     echo "Height: " . $size['height'];
-} catch (InvalidArgumentException $e) {
+} catch (ImageDimensionsException $e) {
     echo "Error: " . $e->getMessage();
 }
 ```
