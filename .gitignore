@@ -5,3 +5,4 @@ Thumbs.db
 .phpunit.result.cache
 /.phpunit.cache/
 /vendor
+composer.lock
