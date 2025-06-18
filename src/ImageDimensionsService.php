@@ -22,53 +22,6 @@ class ImageDimensionsService
     }
 
     /**
-     * Get image dimensions from a file path.
-     *
-     * @param string $filePath
-     * @return array<string, int>
-     * @throws InvalidImageException
-     */
-    protected function getDimensionsFromPath(string $filePath): array
-    {
-        $size = @getimagesize($filePath);
-
-        if ($size === false) {
-            throw InvalidImageException::forPath($filePath);
-        }
-
-        return ["width" => $size[0], "height" => $size[1]];
-    }
-
-    /**
-     * Read a portion of a stream into a temporary file.
-     *
-     * @param resource $streamHandle
-     * @param string $tempFilePath
-     * @param int $bytesToRead
-     * @return void
-     * @throws TemporaryFileException
-     */
-    protected function readStreamToTempFile($streamHandle, string $tempFilePath, int $bytesToRead): void
-    {
-        $tempFileHandle = fopen($tempFilePath, "w");
-        if ($tempFileHandle === false) {
-            throw TemporaryFileException::couldNotWrite();
-        }
-
-        $bytesRead = 0;
-        while (!feof($streamHandle) && $bytesRead < $bytesToRead) {
-            $chunk = fread($streamHandle, 4096);
-            if ($chunk === false) {
-                break;
-            }
-            fwrite($tempFileHandle, $chunk);
-            $bytesRead += strlen($chunk);
-        }
-
-        fclose($tempFileHandle);
-    }
-
-    /**
      * Get image dimensions from a local file.
      *
      * @param string $path
@@ -143,6 +96,10 @@ class ImageDimensionsService
     {
         $disk = Storage::disk($diskName);
 
+        if ($this->isLocalDisk($diskName)) {
+            return $this->fromLocal($disk->path($path));
+        }
+
         if (!$disk->exists($path)) {
             throw FileNotFoundException::forStorage($diskName, $path);
         }
@@ -177,6 +134,66 @@ class ImageDimensionsService
         }
 
         return $dimensions;
+    }
+
+    /**
+     * Get image dimensions from a file path.
+     *
+     * @param string $filePath
+     * @return array<string, int>
+     * @throws InvalidImageException
+     */
+    protected function getDimensionsFromPath(string $filePath): array
+    {
+        $size = @getimagesize($filePath);
+
+        if ($size === false) {
+            throw InvalidImageException::forPath($filePath);
+        }
+
+        return ["width" => $size[0], "height" => $size[1]];
+    }
+
+    /**
+     * Read a portion of a stream into a temporary file.
+     *
+     * @param resource $streamHandle
+     * @param string $tempFilePath
+     * @param int $bytesToRead
+     * @return void
+     * @throws TemporaryFileException
+     */
+    protected function readStreamToTempFile($streamHandle, string $tempFilePath, int $bytesToRead): void
+    {
+        $tempFileHandle = fopen($tempFilePath, "w");
+        if ($tempFileHandle === false) {
+            throw TemporaryFileException::couldNotWrite();
+        }
+
+        $bytesRead = 0;
+        while (!feof($streamHandle) && $bytesRead < $bytesToRead) {
+            $chunk = fread($streamHandle, 4096);
+            if ($chunk === false) {
+                break;
+            }
+            fwrite($tempFileHandle, $chunk);
+            $bytesRead += strlen($chunk);
+        }
+
+        fclose($tempFileHandle);
+    }
+
+    /**
+     * Determine if a given disk is a local disk.
+     *
+     * @param string $diskName
+     * @return bool
+     */
+    protected function isLocalDisk(string $diskName): bool
+    {
+        $driver = config("filesystems.disks.{$diskName}.driver");
+
+        return $driver === "local";
     }
 }
 
