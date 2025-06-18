@@ -16,41 +16,39 @@ class ImageDimensionsTest extends TestCase
         parent::setUp();
 
         // Create a dummy image for local and storage tests
-        Storage::fake("local");
-        Storage::fake("public");
+        Storage::fake('local');
+        Storage::fake('public');
+        Storage::fake('s3');
 
-        $this->createTestImage("test.jpg", 100, 50);
-        $this->createTestImage("test.png", 200, 150);
-        $this->createTestImage("test.gif", 300, 250);
+        $this->createTestImage('test.jpg', 100, 50);
+        $this->createTestImage('test.png', 200, 150);
+        $this->createTestImage('test.gif', 300, 250);
 
         // Create a dummy image that requires full download for dimensions
-        // This is a simplified representation. In a real scenario, you might craft
-        // a specific image file that has its dimensions metadata at the end.
-        // For testing purposes, we'll create a small valid image and then
-        // simulate a partial read that fails, and a full read that succeeds.
-        $this->createTestImage("partial_fail.jpg", 60, 40);
+        $this->createTestImage('partial_fail.jpg', 60, 40);
     }
 
-    protected function createTestImage(string $filename, int $width, int $height, string $type = "jpeg"): void
+    protected function createTestImage(string $filename, int $width, int $height, string $type = 'jpeg'): void
     {
         $image = imagecreatetruecolor($width, $height);
-        $path = Storage::disk("local")->path($filename);
+        $path = Storage::disk('local')->path($filename);
 
         match (strtolower($type)) {
-            "png" => imagepng($image, $path),
-            "gif" => imagegif($image, $path),
+            'png' => imagepng($image, $path),
+            'gif' => imagegif($image, $path),
             default => imagejpeg($image, $path),
         };
         imagedestroy($image);
 
         // Also put it in the public disk for storage tests
-        Storage::disk("public")->put($filename, file_get_contents($path));
+        Storage::disk('public')->put($filename, file_get_contents($path));
+        Storage::disk('s3')->put($filename, file_get_contents($path));
     }
 
     /** @test */
     public function it_can_get_dimensions_from_local_file()
     {
-        $path = Storage::disk("local")->path("test.jpg");
+        $path = Storage::disk('local')->path('test.jpg');
         $dimensions = ImageDimensions::fromLocal($path);
 
         $this->assertEquals(100, $dimensions['width']);
@@ -61,30 +59,46 @@ class ImageDimensionsTest extends TestCase
     public function it_throws_exception_for_non_existent_local_file()
     {
         $this->expectException(FileNotFoundException::class);
-        ImageDimensions::fromLocal("non_existent_file.jpg");
+        ImageDimensions::fromLocal('non_existent_file.jpg');
     }
 
     /** @test */
-    public function it_can_get_dimensions_from_storage_file()
+    public function it_can_get_dimensions_from_storage_file_local_disk()
     {
-        $dimensions = ImageDimensions::fromStorage("public", "test.png");
+        $dimensions = ImageDimensions::fromStorage('public', 'test.png');
 
         $this->assertEquals(200, $dimensions['width']);
         $this->assertEquals(150, $dimensions['height']);
     }
 
     /** @test */
-    public function it_throws_exception_for_non_existent_storage_file()
+    public function it_throws_exception_for_non_existent_storage_file_local_disk()
     {
         $this->expectException(FileNotFoundException::class);
-        ImageDimensions::fromStorage("public", "non_existent_file.jpg");
+        ImageDimensions::fromStorage('public', 'non_existent_file.jpg');
+    }
+
+    /** @test */
+    public function it_can_get_dimensions_from_storage_file_s3_disk()
+    {
+        $dimensions = ImageDimensions::fromStorage('s3', 'test.gif');
+
+        $this->assertEquals(300, $dimensions['width']);
+        $this->assertEquals(250, $dimensions['height']);
+    }
+
+    /** @test */
+    public function it_throws_exception_for_non_existent_storage_file_s3_disk()
+    {
+        $this->expectException(FileNotFoundException::class);
+        ImageDimensions::fromStorage('s3', 'non_existent_file.jpg');
     }
 
     /** @test */
     public function it_can_get_dimensions_from_url()
     {
-        $localPath = Storage::disk("local")->path("test.gif");
-        $fileUrl = "file://" . $localPath;
+        $localPath = Storage::disk('local')->path('test.gif');
+        $fileUrl = 'file://' . $localPath;
 
         $dimensions = ImageDimensions::fromUrl($fileUrl);
 
@@ -96,22 +110,22 @@ class ImageDimensionsTest extends TestCase
     public function it_throws_exception_for_invalid_url()
     {
         $this->expectException(UrlAccessException::class);
-        ImageDimensions::fromUrl("invalid-url");
+        ImageDimensions::fromUrl('invalid-url');
     }
 
     /** @test */
     public function it_throws_exception_for_url_not_pointing_to_image()
     {
         $this->expectException(InvalidImageException::class);
-        ImageDimensions::fromUrl("file:///dev/null");
+        ImageDimensions::fromUrl('file:///dev/null');
     }
 
     /** @test */
     public function it_handles_different_image_formats_from_local()
     {
-        $jpgPath = Storage::disk("local")->path("test.jpg");
-        $pngPath = Storage::disk("local")->path("test.png");
-        $gifPath = Storage::disk("local")->path("test.gif");
+        $jpgPath = Storage::disk('local')->path('test.jpg');
+        $pngPath = Storage::disk('local')->path('test.png');
+        $gifPath = Storage::disk('local')->path('test.gif');
 
         $jpgDimensions = ImageDimensions::fromLocal($jpgPath);
         $this->assertEquals(100, $jpgDimensions['width']);
@@ -129,15 +143,15 @@ class ImageDimensionsTest extends TestCase
     /** @test */
     public function it_handles_different_image_formats_from_storage()
     {
-        $jpgDimensions = ImageDimensions::fromStorage("public", "test.jpg");
+        $jpgDimensions = ImageDimensions::fromStorage('public', 'test.jpg');
         $this->assertEquals(100, $jpgDimensions['width']);
         $this->assertEquals(50, $jpgDimensions['height']);
 
-        $pngDimensions = ImageDimensions::fromStorage("public", "test.png");
+        $pngDimensions = ImageDimensions::fromStorage('public', 'test.png');
         $this->assertEquals(200, $pngDimensions['width']);
         $this->assertEquals(150, $pngDimensions['height']);
 
-        $gifDimensions = ImageDimensions::fromStorage("public", "test.gif");
+        $gifDimensions = ImageDimensions::fromStorage('public', 'test.gif');
         $this->assertEquals(300, $gifDimensions['width']);
         $this->assertEquals(250, $gifDimensions['height']);
     }
@@ -145,9 +159,9 @@ class ImageDimensionsTest extends TestCase
     /** @test */
     public function it_handles_different_image_formats_from_url()
     {
-        $jpgUrl = "file://" . Storage::disk("local")->path("test.jpg");
-        $pngUrl = "file://" . Storage::disk("local")->path("test.png");
-        $gifUrl = "file://" . Storage::disk("local")->path("test.gif");
+        $jpgUrl = 'file://' . Storage::disk('local')->path('test.jpg');
+        $pngUrl = 'file://' . Storage::disk('local')->path('test.png');
+        $gifUrl = 'file://' . Storage::disk('local')->path('test.gif');
 
         $jpgDimensions = ImageDimensions::fromUrl($jpgUrl);
         $this->assertEquals(100, $jpgDimensions['width']);
@@ -170,10 +184,10 @@ class ImageDimensionsTest extends TestCase
         // we'll simulate this by temporarily setting `remote_read_bytes` to a very small number
         // that would typically not contain image headers, forcing the fallback.
 
-        config(["image-dimensions.remote_read_bytes" => 10]); // Set to a very small value
+        config(['image-dimensions.remote_read_bytes' => 10]);
 
-        $localPath = Storage::disk("local")->path("partial_fail.jpg");
-        $fileUrl = "file://" . $localPath;
+        $localPath = Storage::disk('local')->path('partial_fail.jpg');
+        $fileUrl = 'file://' . $localPath;
 
         $dimensions = ImageDimensions::fromUrl($fileUrl);
 
@@ -184,9 +198,20 @@ class ImageDimensionsTest extends TestCase
     /** @test */
     public function it_uses_fallback_for_storage_if_partial_read_fails()
     {
-        config(["image-dimensions.remote_read_bytes" => 10]); // Set to a very small value
+        config(['image-dimensions.remote_read_bytes' => 10]);
 
-        $dimensions = ImageDimensions::fromStorage("public", "partial_fail.jpg");
+        $dimensions = ImageDimensions::fromStorage('public', 'partial_fail.jpg');
+
+        $this->assertEquals(60, $dimensions['width']);
+        $this->assertEquals(40, $dimensions['height']);
+    }
+
+    /** @test */
+    public function it_uses_fallback_for_s3_storage_if_partial_read_fails()
+    {
+        config(['image-dimensions.remote_read_bytes' => 10]);
+
+        $dimensions = ImageDimensions::fromStorage('s3', 'partial_fail.jpg');
 
         $this->assertEquals(60, $dimensions['width']);
         $this->assertEquals(40, $dimensions['height']);
