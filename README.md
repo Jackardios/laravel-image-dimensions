@@ -17,7 +17,7 @@ This package aims to quickly retrieve image dimensions without downloading the e
 You can install the package via Composer:
 
 ```bash
-composer require jackardios/image-dimensions
+composer require jackardios/laravel-image-dimensions
 ```
 
 You can also add the Facade alias:
@@ -103,22 +103,20 @@ try {
 
 ### Error Handling
 
-Methods will throw an `InvalidArgumentException` if:
+Methods will throw specific exceptions that extend `Jackardios\ImageDimensions\Exceptions\ImageDimensionsException`:
 
--   The file (local or storage) does not exist.
--   The URL is invalid or the remote resource cannot be accessed.
--   The file is not a valid image or its dimensions cannot be determined.
+-   `FileNotFoundException`: If the local or storage file does not exist.
+-   `UrlAccessException`: If the URL is invalid, cannot be opened, or the full content cannot be downloaded.
+-   `InvalidImageException`: If the file is not a valid image or its dimensions cannot be determined even after fallback attempts.
+-   `TemporaryFileException`: If there are issues creating or writing to temporary files.
+-   `StorageAccessException`: If there are issues reading from a Laravel storage stream or getting full content.
 
 ## Contributing
 
-Feel free to open issues or submit pull requests on the [GitHub repository](https://github.com/Jackardios/image-dimensions).
+Feel free to open issues or submit pull requests on the [GitHub repository](https://github.com/Jackardios/laravel-image-dimensions).
 
 ## License
 
 This package is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
-
-## Author
-
-Salavat Salakhutdinov
 
 
