@@ -1,0 +1,49 @@
+{
+    "name": "jackardios/laravel-image-dimensions",
+    "description": "A Laravel package to efficiently determine image dimensions from local files, URLs, and Laravel storage.",
+    "keywords": ["laravel", "image", "dimensions", "size", "url", "storage"],
+    "homepage": "https://github.com/Jackardios/laravel-image-dimensions",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Salavat Salakhutdinov",
+            "email": "salahutdinov.salavat@gmail.com"
+        }
+    ],
+    "require": {
+        "php": "^8.1",
+        "illuminate/support": "^9.0 || ^10.0 || ^11.0",
+        "illuminate/filesystem": "^9.0 || ^10.0 || ^11.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Jackardios\\ImageDimensions\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Jackardios\\ImageDimensions\\Tests\\": "tests/"
+        }
+    },
+    "require-dev": {
+        "ext-gd": "*",
+        "orchestra/testbench": "^7.0 || ^8.0 || ^9.0",
+        "phpunit/phpunit": "^9.5 || ^10.0"
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Jackardios\\ImageDimensions\\Providers\\ImageDimensionsServiceProvider"
+            ],
+            "aliases": {
+                "ImageDimensions": "Jackardios\\ImageDimensions\\Facades\\ImageDimensions"
+            }
+        }
+    },
+    "scripts": {
+        "test": "phpunit"
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}
+
