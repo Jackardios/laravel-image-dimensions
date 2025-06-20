@@ -9,6 +9,7 @@ use Jackardios\ImageDimensions\Exceptions\InvalidImageException;
 use Jackardios\ImageDimensions\Exceptions\StorageAccessException;
 use Jackardios\ImageDimensions\Exceptions\TemporaryFileException;
 use Jackardios\ImageDimensions\Exceptions\UrlAccessException;
+use League\Flysystem\Local\LocalFilesystemAdapter;
 
 class ImageDimensionsService
 {
@@ -96,7 +97,7 @@ class ImageDimensionsService
     {
         $disk = Storage::disk($diskName);
 
-        if ($this->isLocalDisk($diskName)) {
+        if ($disk->getAdapter() instanceof LocalFilesystemAdapter){
             return $this->fromLocal($disk->path($path));
         }
 
@@ -181,19 +182,6 @@ class ImageDimensionsService
         }
 
         fclose($tempFileHandle);
-    }
-
-    /**
-     * Determine if a given disk is a local disk.
-     *
-     * @param string $diskName
-     * @return bool
-     */
-    protected function isLocalDisk(string $diskName): bool
-    {
-        $driver = config("filesystems.disks.{$diskName}.driver");
-
-        return $driver === "local";
     }
 }
 
