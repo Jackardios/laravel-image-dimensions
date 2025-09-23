@@ -11,7 +11,7 @@ class FileNotFoundException extends ImageDimensionsException
 
     public static function forStorage(string $diskName, string $path): self
     {
-        return new self("File not found on disk \'{$diskName}\': {$path}");
+        return new self("File not found on disk '{$diskName}': {$path}");
     }
 }
 
