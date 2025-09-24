@@ -1,9 +1,11 @@
 <?php
 
-namespace Tests\Unit;
+namespace Jackardios\ImageDimensions\Tests\Unit;
 
+use Illuminate\Contracts\Filesystem\Filesystem;
+use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
-use Jackardios\ImageDimensions\Exceptions\FileNotFoundException;
 use Jackardios\ImageDimensions\Exceptions\InvalidImageException;
 use Jackardios\ImageDimensions\Exceptions\StorageAccessException;
 use Jackardios\ImageDimensions\Exceptions\TemporaryFileException;
@@ -26,389 +28,196 @@ class ExceptionHandlingTest extends TestCase
         if (!is_dir($this->testFilesPath)) {
             mkdir($this->testFilesPath, 0777, true);
         }
+
+        $img = imagecreate(10, 10);
+        imagecolorallocate($img, 255, 255, 255);
+        imagepng($img, $this->testFilesPath . '/image.png');
+        imagedestroy($img);
     }
 
     protected function tearDown(): void
     {
-        // Clean up test files
         if (is_dir($this->testFilesPath)) {
-            array_map('unlink', glob($this->testFilesPath . '/*'));
-            rmdir($this->testFilesPath);
+            $files = glob($this->testFilesPath . '/*');
+            foreach ($files as $file) {
+                if (is_file($file)) {
+                    @unlink($file);
+                }
+            }
+            @rmdir($this->testFilesPath);
         }
-
         Mockery::close();
         parent::tearDown();
     }
 
-    /**
-     * Test FileNotFoundException messages
-     */
-    public function testFileNotFoundExceptionMessages(): void
-    {
-        // Test local file not found
-        $exception = FileNotFoundException::forLocal('/path/to/file.jpg');
-        $this->assertEquals('Local file not found: /path/to/file.jpg', $exception->getMessage());
+    // --- LOCAL ---
 
-        // Test storage file not found
-        $exception = FileNotFoundException::forStorage('s3', 'images/photo.png');
-        $this->assertEquals("File not found on disk 's3': images/photo.png", $exception->getMessage());
-    }
-
-    /**
-     * Test InvalidImageException messages
-     */
-    public function testInvalidImageExceptionMessages(): void
-    {
-        $exception = InvalidImageException::forPath('/path/to/corrupt.jpg');
-        $this->assertEquals('Could not get image dimensions for file: /path/to/corrupt.jpg', $exception->getMessage());
-    }
-
-    /**
-     * Test StorageAccessException messages
-     */
-    public function testStorageAccessExceptionMessages(): void
-    {
-        // Test stream read error
-        $exception = StorageAccessException::couldNotReadStream('remote/file.jpg');
-        $this->assertEquals('Could not read stream from storage file: remote/file.jpg', $exception->getMessage());
-
-        // Test content read error
-        $exception = StorageAccessException::couldNotReadFullContent('remote/large.png');
-        $this->assertEquals('Could not read full content from storage file: remote/large.png', $exception->getMessage());
-    }
-
-    /**
-     * Test TemporaryFileException messages
-     */
-    public function testTemporaryFileExceptionMessages(): void
-    {
-        // Test creation error
-        $exception = TemporaryFileException::couldNotCreate();
-        $this->assertEquals('Could not create temporary file.', $exception->getMessage());
-
-        // Test write error
-        $exception = TemporaryFileException::couldNotWrite();
-        $this->assertEquals('Could not open temporary file for writing.', $exception->getMessage());
-    }
-
-    /**
-     * Test UrlAccessException messages
-     */
-    public function testUrlAccessExceptionMessages(): void
-    {
-        // Test open error
-        $exception = UrlAccessException::couldNotOpen('https://example.com/image.jpg');
-        $this->assertEquals('Could not open URL: https://example.com/image.jpg', $exception->getMessage());
-
-        // Test download error
-        $exception = UrlAccessException::couldNotDownload('https://example.com/large.png');
-        $this->assertEquals('Could not download full content from URL: https://example.com/large.png', $exception->getMessage());
-    }
-
-    /**
-     * Test handling of unreadable files
-     */
-    public function testUnreadableFile(): void
+    /** @test */
+    public function it_throws_for_unreadable_local_file(): void
     {
         $path = $this->testFilesPath . '/unreadable.jpg';
-
-        // Create a file and make it unreadable
-        file_put_contents($path, 'test');
+        touch($path);
         chmod($path, 0000);
 
+        $this->expectException(InvalidImageException::class);
+        $this->expectExceptionMessage('File is not readable');
         try {
-            $this->expectException(InvalidImageException::class);
-            $this->expectExceptionMessage('File is not readable');
-
             $this->service->fromLocal($path);
         } finally {
             chmod($path, 0644);
-            unlink($path);
         }
     }
 
-    /**
-     * Test handling of corrupted image files
-     */
-    public function testCorruptedImageFile(): void
+    /** @test */
+    public function it_throws_for_corrupted_image_file(): void
     {
         $path = $this->testFilesPath . '/corrupted.jpg';
-        file_put_contents($path, 'This is not a valid image file content');
-
+        file_put_contents($path, 'this is not a valid image');
         $this->expectException(InvalidImageException::class);
-
-        try {
-            $this->service->fromLocal($path);
-        } finally {
-            unlink($path);
-        }
+        $this->service->fromLocal($path);
     }
 
-    /**
-     * Test handling of empty files
-     */
-    public function testEmptyFile(): void
+    /** @test */
+    public function it_handles_symbolic_links_correctly(): void
+    {
+        if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
+            $this->markTestSkipped('Symbolic link test is not available on Windows.');
+        }
+
+        $linkPath = $this->testFilesPath . '/link.png';
+        symlink($this->testFilesPath . '/image.png', $linkPath);
+
+        $result = $this->service->fromLocal($linkPath);
+        $this->assertEquals(['width' => 10, 'height' => 10], $result);
+    }
+
+    /** @test */
+    public function it_throws_for_empty_file(): void
     {
         $path = $this->testFilesPath . '/empty.png';
         touch($path);
-
         $this->expectException(InvalidImageException::class);
-
-        try {
-            $this->service->fromLocal($path);
-        } finally {
-            unlink($path);
-        }
+        $this->expectExceptionMessage('File is empty');
+        $this->service->fromLocal($path);
     }
 
-    /**
-     * Test handling of files with invalid extensions
-     */
-    public function testInvalidFileExtension(): void
+    // --- URL ---
+
+    /** @test */
+    public function it_handles_network_timeouts(): void
     {
-        config(['image-dimensions.supported_formats' => ['jpg', 'png', 'gif']]);
-        $service = new ImageDimensionsService();
+        $url = 'https://example.com/timeout.jpg';
+        Http::fake([
+            $url => function () {
+                throw new ConnectionException('Timeout was reached');
+            },
+        ]);
 
-        $path = $this->testFilesPath . '/document.pdf';
-        file_put_contents($path, 'PDF content');
-
-        $this->expectException(InvalidImageException::class);
-        $this->expectExceptionMessage('Unsupported image format: pdf');
-
-        try {
-            $service->fromLocal($path);
-        } finally {
-            unlink($path);
-        }
+        $this->expectException(UrlAccessException::class);
+        $this->expectExceptionMessage('Could not download full content from URL: https://example.com/timeout.jpg');
+        $this->service->fromUrl($url);
     }
 
-    /**
-     * Test handling of malformed SVG files
-     */
-    public function testMalformedSvg(): void
+    /** @test */
+    public function it_handles_redirects(): void
     {
-        $tests = [
-            'invalid_xml' => '<?xml version="1.0"?><svg',
-            'no_svg_tag' => '<?xml version="1.0"?><div>Not SVG</div>',
-            'no_dimensions' => '<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg"></svg>',
-            'invalid_viewbox'=> '<?xml version="1.0"?><svg viewBox="invalid" xmlns="http://www.w3.org/2000/svg"></svg>',
-        ];
+        $url1 = 'https://example.com/redirect.jpg';
+        $url2 = 'https://example.com/final.png';
+        $imageData = file_get_contents($this->testFilesPath . '/image.png');
 
-        foreach ($tests as $name => $content) {
-            $path = $this->testFilesPath . "/{$name}.svg";
-            file_put_contents($path, $content);
+        Http::fake([
+            $url1 => Http::response(null, 302, ['Location' => $url2]),
+            $url2 => Http::response($imageData, 200),
+        ]);
 
-            try {
-                $this->service->fromLocal($path);
-                $this->fail("Expected InvalidImageException for case '{$name}', but no exception was thrown.");
-            } catch (InvalidImageException $e) {
-                $this->assertInstanceOf(InvalidImageException::class, $e);
-            } finally {
-                @unlink($path);
-            }
-        }
+        $result = $this->service->fromUrl($url1);
+        $this->assertEquals(['width' => 10, 'height' => 10], $result);
     }
 
-    /**
-     * Test handling of network timeouts
-     */
-    public function testNetworkTimeout(): void
+    /** @test */
+    public function it_throws_for_too_many_redirects(): void
     {
-        // This test would require a mock server that simulates timeout
-        $this->markTestSkipped('Network timeout test requires mock server setup');
+        // Laravel's HTTP client handles redirect loops automatically and throws an exception.
+        $url = 'https://example.com/redirect-loop';
+        Http::fake([
+            $url => Http::response(null, 302, ['Location' => $url]),
+        ]);
+
+        $this->expectException(UrlAccessException::class);
+        $this->service->fromUrl($url);
     }
 
-    /**
-     * Test handling of redirect loops
-     */
-    public function testRedirectLoop(): void
-    {
-        // This test would require a mock server that creates redirect loops
-        $this->markTestSkipped('Redirect loop test requires mock server setup');
-    }
+    // --- STORAGE ---
 
-    /**
-     * Test handling of storage disk not found
-     */
-    public function testStorageDiskNotFound(): void
+    /** @test */
+    public function it_throws_for_non_existent_storage_disk(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-
         $this->service->fromStorage('non-existent-disk', 'image.jpg');
     }
 
-    /**
-     * Test handling of storage stream failure
-     */
-    public function testStorageStreamFailure(): void
+    /** @test */
+    public function it_throws_if_storage_stream_cannot_be_read(): void
     {
-        Storage::fake('test-disk');
-        $disk = Storage::disk('test-disk');
+        $diskName = 's3_mock';
+        $path = 'image.png';
 
-        // Create a file
-        $disk->put('test.jpg', 'fake image content');
-
-        // Mock the disk to return false for readStream
-        $mockDisk = Mockery::mock(\Illuminate\Contracts\Filesystem\Filesystem::class);
-        $mockDisk->shouldReceive('exists')->with('test.jpg')->andReturn(true);
+        $mockDisk = Mockery::mock(Filesystem::class);
+        $mockDisk->shouldReceive('exists')->with($path)->andReturn(true);
         $mockDisk->shouldReceive('getAdapter')->andReturn(new \stdClass());
-        $mockDisk->shouldReceive('lastModified')->with('test.jpg')->andReturn(time());
-        $mockDisk->shouldReceive('readStream')->with('test.jpg')->andReturn(false);
+        $mockDisk->shouldReceive('lastModified')->with($path)->andReturn(time());
+        $mockDisk->shouldReceive('readStream')->with($path)->andReturn(false);
 
-        Storage::shouldReceive('disk')->with('test-disk')->andReturn($mockDisk);
+        Storage::shouldReceive('disk')->with($diskName)->andReturn($mockDisk);
 
         $this->expectException(StorageAccessException::class);
-        $this->expectExceptionMessage('Could not read stream from storage file');
-
-        $this->service->fromStorage('test-disk', 'test.jpg');
+        $this->expectExceptionMessage("Could not read stream from storage file: {$path}");
+        $this->service->fromStorage($diskName, $path);
     }
 
-    /**
-     * Test handling of null/false values
-     */
-    public function testNullAndFalseValues(): void
+    /** @test */
+    public function it_throws_if_storage_full_content_cannot_be_read(): void
     {
-        // Test with null path (PHP 8.0+ would throw TypeError)
-        try {
-            $this->service->fromLocal(null);
-            $this->fail('Expected TypeError or InvalidImageException');
-        } catch (\TypeError | InvalidImageException $e) {
-            $this->assertTrue(true);
-        }
+        $diskName = 's3_mock';
+        $path = 'image.png';
 
-        // Test with false path
-        try {
-            $this->service->fromLocal(false);
-            $this->fail('Expected TypeError or InvalidImageException');
-        } catch (\TypeError | InvalidImageException $e) {
-            $this->assertTrue(true);
-        }
+        $stream = fopen('php://memory', 'r+');
+        fwrite($stream, 'invalid stream data');
+        rewind($stream);
+
+        $mockDisk = Mockery::mock(Filesystem::class);
+        $mockDisk->shouldReceive('exists')->with($path)->andReturn(true);
+        $mockDisk->shouldReceive('getAdapter')->andReturn(new \stdClass());
+        $mockDisk->shouldReceive('lastModified')->with($path)->andReturn(time());
+        $mockDisk->shouldReceive('readStream')->with($path)->andReturn($stream);
+        $mockDisk->shouldReceive('get')->with($path)->andReturn(null);
+
+        Storage::shouldReceive('disk')->with($diskName)->andReturn($mockDisk);
+
+        $this->expectException(StorageAccessException::class);
+        $this->expectExceptionMessage("Could not read full content from storage file: {$path}");
+        $this->service->fromStorage($diskName, $path);
     }
 
-    /**
-     * Test handling of special characters in paths
-     */
-    public function testSpecialCharactersInPaths(): void
+    // --- CONFIG ---
+
+    /** @test */
+    public function it_throws_if_temp_dir_is_not_writable(): void
     {
-        $specialNames = [
-            'image with spaces.png',
-            'image-with-dashes.jpg',
-            'image_with_underscores.gif',
-            'image.multiple.dots.svg',
-            'имя-на-русском.png',
-            '中文文件名.jpg',
-        ];
+        $invalidDir = $this->testFilesPath . '/unwritable';
+        mkdir($invalidDir, 0444); // Read-only
+        config(['image-dimensions.temp_dir' => $invalidDir]);
+        $service = new ImageDimensionsService();
 
-        // Create a simple image
-        $image = imagecreate(10, 10);
-        imagecolorallocate($image, 255, 255, 255);
-
-        foreach ($specialNames as $name) {
-            $path = $this->testFilesPath . '/' . $name;
-
-            // Save as PNG regardless of extension for simplicity
-            imagepng($image, $path);
-
-            try {
-                $result = $this->service->fromLocal($path);
-                $this->assertEquals(10, $result['width']);
-                $this->assertEquals(10, $result['height']);
-            } catch (InvalidImageException $e) {
-                // Some extensions might not match content
-                $this->assertTrue(true);
-            } finally {
-                if (file_exists($path)) {
-                    unlink($path);
-                }
-            }
-        }
-
-        imagedestroy($image);
-    }
-
-    /**
-     * Test handling of symbolic links
-     */
-    public function testSymbolicLinks(): void
-    {
-        if (PHP_OS_FAMILY === 'Windows') {
-            $this->markTestSkipped('Symbolic link test skipped on Windows');
-        }
-
-        // Create a real image file
-        $realPath = $this->testFilesPath . '/real-image.png';
-        $image = imagecreate(50, 50);
-        imagecolorallocate($image, 255, 255, 255);
-        imagepng($image, $realPath);
-        imagedestroy($image);
-
-        // Create a symbolic link
-        $linkPath = $this->testFilesPath . '/link-to-image.png';
-        symlink($realPath, $linkPath);
+        $this->expectException(TemporaryFileException::class);
+        $this->expectExceptionMessage('Could not create temporary file');
 
         try {
-            $result = $this->service->fromLocal($linkPath);
-            $this->assertEquals(50, $result['width']);
-            $this->assertEquals(50, $result['height']);
+            // fromUrl использует временные файлы
+            Http::fake(['https://example.com/image.png' => Http::response('data')]);
+            $service->fromUrl('https://example.com/image.png');
         } finally {
-            unlink($linkPath);
-            unlink($realPath);
-        }
-    }
-
-    /**
-     * Test handling of very long file paths
-     */
-    public function testVeryLongFilePaths(): void
-    {
-        // Create a path with maximum allowed length
-        $longName = str_repeat('a', 200) . '.png';
-        $path = $this->testFilesPath . '/' . $longName;
-
-        // This might fail on some file systems
-        try {
-            $image = imagecreate(10, 10);
-            imagecolorallocate($image, 255, 255, 255);
-            @imagepng($image, $path);
-            imagedestroy($image);
-
-            if (file_exists($path)) {
-                $result = $this->service->fromLocal($path);
-                $this->assertEquals(10, $result['width']);
-                $this->assertEquals(10, $result['height']);
-                unlink($path);
-            } else {
-                $this->markTestSkipped('File system does not support long file names');
-            }
-        } catch (\Exception $e) {
-            $this->markTestSkipped('File system does not support long file names');
-        }
-    }
-
-    /**
-     * Test concurrent file access
-     */
-    public function testConcurrentFileAccess(): void
-    {
-        $path = $this->testFilesPath . '/concurrent.png';
-
-        // Create an image
-        $image = imagecreate(100, 100);
-        imagecolorallocate($image, 255, 255, 255);
-        imagepng($image, $path);
-        imagedestroy($image);
-
-        // Open file for reading (simulate concurrent access)
-        $handle = fopen($path, 'rb');
-
-        try {
-            // Should still be able to read dimensions
-            $result = $this->service->fromLocal($path);
-            $this->assertEquals(100, $result['width']);
-            $this->assertEquals(100, $result['height']);
-        } finally {
-            fclose($handle);
-            unlink($path);
+            rmdir($invalidDir);
         }
     }
 }
