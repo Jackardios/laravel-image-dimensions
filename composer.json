@@ -22,7 +22,7 @@
         "orchestra/testbench": "^8.0 || ^9.0 || ^10.0",
         "phpunit/phpunit": "^10.0 || ^11.0",
         "league/flysystem-memory": "^3.0",
-        "guzzlehttp/promises": "^1.5"
+        "guzzlehttp/promises": "^2.0"
     },
     "autoload": {
         "psr-4": {
