@@ -1,16 +1,24 @@
 # Laravel Image Dimensions
 
-A Laravel package to efficiently determine image dimensions (width and height) from local files, URLs, and Laravel storage.
+[![Latest Version on Packagist](https://img.shields.io/packagist/v/jackardios/laravel-image-dimensions.svg?style=flat-square)](https://packagist.org/packages/jackardios/laravel-image-dimensions)
+[![Tests](https://github.com/Jackardios/laravel-image-dimensions/actions/workflows/tests.yml/badge.svg)](https://github.com/Jackardios/laravel-image-dimensions/actions/workflows/tests.yml)
 
-This package aims to quickly retrieve image dimensions without downloading the entire file, especially for remote images, by reading only the necessary initial bytes.
+A robust and efficient Laravel package to get the dimensions (width and height) of images from various sources. It's designed to be fast, reliable, and easy to use, with built-in support for caching and optimized handling of remote files.
 
-## Features
+### Features
 
--   **Local Files**: Determine dimensions from images stored on the local filesystem.
--   **Remote URLs**: Efficiently get dimensions from images via URL by reading only the initial bytes (e.g., first 64KB).
--   **Laravel Storage**: Support for images stored in Laravel's configured filesystems (e.g., `public`, `s3`).
--   **Broad Image Format Support**: Leverages PHP's `getimagesize()` function, which supports a wide range of image formats (JPEG, PNG, GIF, BMP, WebP, etc.).
--   **Fast and Memory Efficient**: Designed to minimize memory consumption and execution time, particularly for remote files.
+-   **Multiple Sources**: Get dimensions from local file paths, remote URLs, and Laravel Storage disks.
+-   **Wide Format Support**: Supports common image formats like PNG, JPEG, GIF, WebP, and BMP.
+-   **Advanced SVG Parsing**: Correctly determines dimensions from SVGs, including those using `viewBox` or percentage-based sizes.
+-   **Optimized Remote Fetching**: Reads a minimal portion of remote files first, avoiding large downloads when possible.
+-   **Built-in Caching**: Automatically caches image dimensions to boost performance for repeated requests.
+-   **Laravel Native**: Seamless integration with Laravel's Filesystem, Cache, and HTTP Client.
+-   **Secure**: Includes basic sanitization for SVG files to prevent XSS vulnerabilities.
+
+## Requirements
+
+-   PHP 8.1+
+-   Laravel 10.x, 11.x, or 12.x
 
 ## Installation
 
@@ -20,103 +28,122 @@ You can install the package via Composer:
 composer require jackardios/laravel-image-dimensions
 ```
 
-You can also add the Facade alias:
+The service provider and facade will be automatically registered.
 
-```php
-// config/app.php
-
-'aliases' => [
-    // ...
-    'ImageDimensions' => Jackardios\ImageDimensions\Facades\ImageDimensions::class,
-],
-```
-
-Publish the configuration file using the Artisan command:
+To publish the configuration file, run:
 
 ```bash
-php artisan vendor:publish --provider="Jackardios\\ImageDimensions\\Providers\\ImageDimensionsServiceProvider" --tag="image-dimensions-config"
+php artisan vendor:publish --tag="image-dimensions-config"
 ```
 
-This will publish `config/image-dimensions.php`.
-
-## Configuration
-
-The published configuration file (`config/image-dimensions.php`) allows you to customize the package's behavior:
-
-```php
-<?php
-
-return [
-    /*
-     * The maximum number of bytes to read from a remote image when determining its dimensions.
-     * This helps to quickly determine dimensions without downloading the entire file.
-     */
-    'remote_read_bytes' => 65536,
-
-    /*
-     * Path to a temporary directory where remote image data will be stored.
-     * Ensure this directory is writable by the web server.
-     */
-    'temp_dir' => sys_get_temp_dir(),
-];
-```
-
--   `remote_read_bytes`: Defines how many bytes to read from remote or storage files. `getimagesize()` typically needs only a small header to determine dimensions. 65536 bytes (64KB) is usually more than enough.
--   `temp_dir`: Specifies the directory for temporary files created when reading remote or storage images. Ensure this directory is writable by your web server.
+This will create a `config/image-dimensions.php` file where you can customize the package settings.
 
 ## Usage
 
-The `ImageDimensions` class provides static methods to get image dimensions. Each method returns an `ImageDimensions` object with `width` and `height` properties.
+The package provides a simple and consistent API to get image dimensions from different sources. All methods return an associative array `['width' => int, 'height' => int]` on success or throw an exception on failure.
+
+### Using the Facade
+
+The easiest way to use the package is through the `ImageDimensions` facade.
+
+#### From a Local File Path
+
+Provide an absolute path to a file on your server.
 
 ```php
 use Jackardios\ImageDimensions\Facades\ImageDimensions;
-use Jackardios\ImageDimensions\Exceptions\ImageDimensionsException;
 
-// From a local file path
-try {
-    $size = ImageDimensions::fromLocal('/path/to/your/image.jpg');
-    echo "Width: " . $size['width']; // e.g., 1920
-    echo "Height: " . $size['height']; // e.g., 1080
-} catch (ImageDimensionsException $e) {
-    echo "Error: " . $e->getMessage();
-}
+$path = public_path('images/my-image.png');
 
-// From a URL
 try {
-    $size = ImageDimensions::fromUrl('https://example.com/images/photo.png');
-    echo "Width: " . $size['width'];
-    echo "Height: " . $size['height'];
-} catch (ImageDimensionsException $e) {
-    echo "Error: " . $e->getMessage();
-}
-
-// From Laravel Storage disk
-// Assuming you have a file 'images/profile.gif' on your 'public' disk
-try {
-    $size = ImageDimensions::fromStorage('public', 'images/profile.gif');
-    echo "Width: " . $size['width'];
-    echo "Height: " . $size['height'];
-} catch (ImageDimensionsException $e) {
-    echo "Error: " . $e->getMessage();
+    $dimensions = ImageDimensions::fromLocal($path);
+    // $dimensions -> ['width' => 800, 'height' => 600]
+} catch (\Exception $e) {
+    // Handle exceptions like FileNotFoundException or InvalidImageException
 }
 ```
 
-### Error Handling
+#### From a Remote URL
 
-Methods will throw specific exceptions that extend `Jackardios\ImageDimensions\Exceptions\ImageDimensionsException`:
+Provide a public URL to an image. Only `http` and `https` schemes are supported.
 
--   `FileNotFoundException`: If the local or storage file does not exist.
--   `UrlAccessException`: If the URL is invalid, cannot be opened, or the full content cannot be downloaded.
--   `InvalidImageException`: If the file is not a valid image or its dimensions cannot be determined even after fallback attempts.
--   `TemporaryFileException`: If there are issues creating or writing to temporary files.
--   `StorageAccessException`: If there are issues reading from a Laravel storage stream or getting full content.
+```php
+use Jackardios\ImageDimensions\Facades\ImageDimensions;
+
+$url = 'https://example.com/path/to/image.jpg';
+
+try {
+    $dimensions = ImageDimensions::fromUrl($url);
+    // $dimensions -> ['width' => 1920, 'height' => 1080]
+} catch (\Exception $e) {
+    // Handle exceptions like UrlAccessException or InvalidImageException
+}
+```
+
+#### From Laravel Storage
+
+Provide the disk name and the path to the file within that disk. This works for both local and cloud-based storage drivers (like `s3`).
+
+```php
+use Jackardios\ImageDimensions\Facades\ImageDimensions;
+
+// Example with a local disk
+$dimensions = ImageDimensions::fromStorage('public', 'uploads/avatar.png');
+
+// Example with an S3 disk
+$dimensions = ImageDimensions::fromStorage('s3', 'images/banner.svg');
+```
+
+### Exception Handling
+
+The package throws specific exceptions to allow for fine-grained error handling:
+
+-   `FileNotFoundException`: The file does not exist at the specified local or storage path.
+-   `UrlAccessException`: The URL could not be accessed (e.g., 404 error, network timeout).
+-   `InvalidImageException`: The file is not a valid or supported image, or its dimensions could not be determined.
+-   `StorageAccessException`: The file stream or content could not be read from the storage disk.
+-   `TemporaryFileException`: A temporary file could not be created or written to, often due to permissions issues.
+
+## Configuration
+
+After publishing the configuration file, you can modify the settings in `config/image-dimensions.php`.
+
+### Caching
+
+Caching is enabled by default to improve performance.
+
+-   `enable_cache`: Set to `true` to enable caching, `false` to disable it.
+-   `cache_ttl`: The duration (in seconds) to cache dimensions. The default is `3600` (1 hour).
+
+The cache key is generated based on the source type, identifier (path/URL), and file modification time (for local/storage files), ensuring the cache is automatically invalidated when a file changes.
+
+### Remote File Handling
+
+-   `remote_read_bytes`: The number of bytes to initially read from a remote source (URL or cloud storage). This allows the package to get dimensions from the image header without downloading the entire file. Default: `131072` (128KB).
+-   `http`: Standard Laravel HTTP Client options like `timeout`, `connect_timeout`, and `verify_ssl`.
+
+### SVG Handling
+
+-   `svg.max_file_size`: The maximum allowed file size (in bytes) for SVG files to prevent parsing of excessively large files. Default: `10485760` (10MB).
+
+## Testing
+
+```bash
+composer test
+```
 
 ## Contributing
 
-Feel free to open issues or submit pull requests on the [GitHub repository](https://github.com/Jackardios/laravel-image-dimensions).
+Contributions are welcome! Please feel free to submit a pull request for any bug fixes or improvements.
+
+1.  Fork the repository.
+2.  Create a new branch (`git checkout -b feature/my-new-feature`).
+3.  Make your changes.
+4.  Ensure the tests pass (`composer test`).
+5.  Commit your changes (`git commit -am 'Add some feature'`).
+6.  Push to the branch (`git push origin feature/my-new-feature`).
+7.  Create a new Pull Request.
 
 ## License
 
-This package is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
-
-
+The MIT License (MIT). Please see [License File](LICENSE.md) for more information.
