@@ -9,9 +9,11 @@ return [
     | The number of bytes to read from remote sources (URLs, cloud storage)
     | before attempting to determine image dimensions. This optimization
     | helps avoid downloading entire large images when possible.
+    | Default: 131072 (128KB) - sufficient for most image headers
+    | Min: 8192 (8KB), Max: 1048576 (1MB)
     |
     */
-    'remote_read_bytes' => env('IMAGE_DIMENSIONS_REMOTE_READ_BYTES', 65536),
+    'remote_read_bytes' => env('IMAGE_DIMENSIONS_REMOTE_READ_BYTES', 131072),
 
     /*
     |--------------------------------------------------------------------------
@@ -20,6 +22,7 @@ return [
     |
     | The directory where temporary files will be created when processing
     | remote images. Defaults to the system's temp directory.
+    | The directory must exist and be writable.
     |
     */
     'temp_dir' => env('IMAGE_DIMENSIONS_TEMP_DIR', sys_get_temp_dir()),
@@ -48,23 +51,28 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Supported Formats
+    | HTTP Configuration
     |--------------------------------------------------------------------------
     |
-    | List of supported image formats. Leave empty to support all formats
-    | that PHP can handle. Common formats include:
-    | jpg, jpeg, png, gif, bmp, webp, svg, ico, avif
+    | Configuration for HTTP requests when fetching images from URLs
     |
     */
-    'supported_formats' => [
-        'jpg',
-        'jpeg',
-        'png',
-        'gif',
-        'bmp',
-        'webp',
-        'svg',
-        'ico',
-        'avif'
+    'http' => [
+        'timeout' => env('IMAGE_DIMENSIONS_HTTP_TIMEOUT', 60),
+        'connect_timeout' => env('IMAGE_DIMENSIONS_HTTP_CONNECT_TIMEOUT', 10),
+        'verify_ssl' => env('IMAGE_DIMENSIONS_HTTP_VERIFY_SSL', true),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | SVG Configuration
+    |--------------------------------------------------------------------------
+    |
+    | Configuration specific to SVG file handling
+    |
+    */
+    'svg' => [
+        // Maximum allowed size for SVG files (in bytes)
+        'max_file_size' => env('IMAGE_DIMENSIONS_SVG_MAX_SIZE', 10485760), // 10MB
     ],
 ];

@@ -13,6 +13,7 @@
     "require": {
         "ext-dom": "*",
         "ext-fileinfo": "*",
+        "ext-libxml": "*",
         "illuminate/support": "^10.0 || ^11.0 || ^12.0",
         "illuminate/filesystem": "^10.0 || ^11.0 || ^12.0"
     },
