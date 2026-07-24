@@ -80,6 +80,30 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | URL / SSRF Protection
+    |--------------------------------------------------------------------------
+    |
+    | Controls which URLs fromUrl() is allowed to fetch, mitigating Server-Side
+    | Request Forgery (SSRF).
+    |
+    | - allow_private_hosts: when false (default), hosts resolving to private,
+    |   loopback, link-local, or reserved IP ranges (IPv4 and IPv6) are blocked,
+    |   including cloud metadata endpoints such as 169.254.169.254. Set to true
+    |   to restore the unrestricted behaviour (not recommended).
+    | - allowed_hosts: when non-empty, ONLY these hostnames may be fetched — a
+    |   strict allowlist that also mitigates DNS rebinding.
+    | - max_redirects: maximum number of redirects to follow; each hop is
+    |   re-validated against the rules above.
+    |
+    */
+    'url' => [
+        'allow_private_hosts' => env('IMAGE_DIMENSIONS_URL_ALLOW_PRIVATE_HOSTS', false),
+        'allowed_hosts' => array_filter(explode(',', (string) env('IMAGE_DIMENSIONS_URL_ALLOWED_HOSTS', ''))),
+        'max_redirects' => env('IMAGE_DIMENSIONS_URL_MAX_REDIRECTS', 5),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | SVG Configuration
     |--------------------------------------------------------------------------
     |

@@ -12,8 +12,10 @@ use Jackardios\ImageDimensions\Exceptions\InvalidImageException;
 use Jackardios\ImageDimensions\Exceptions\StorageAccessException;
 use Jackardios\ImageDimensions\Exceptions\TemporaryFileException;
 use Jackardios\ImageDimensions\Exceptions\UrlAccessException;
+use Jackardios\ImageDimensions\Exceptions\UrlNotAllowedException;
 use Jackardios\ImageDimensions\Support\SvgDimensionsExtractor;
 use Jackardios\ImageDimensions\Support\TemporaryFile;
+use Jackardios\ImageDimensions\Support\UrlGuard;
 use League\Flysystem\Local\LocalFilesystemAdapter;
 use Throwable;
 
@@ -28,6 +30,7 @@ class ImageDimensionsService implements ImageDimensionsContract
     /** @var array{timeout: int, connect_timeout: int, verify: bool} */
     protected array $httpOptions;
     protected SvgDimensionsExtractor $svgExtractor;
+    protected UrlGuard $urlGuard;
 
     /**
      * @param array<string, mixed>|null $config Package config. When null, falls
@@ -52,6 +55,13 @@ class ImageDimensionsService implements ImageDimensionsContract
             'verify' => (bool) ($config['http']['verify_ssl'] ?? true),
         ];
         $this->svgExtractor = new SvgDimensionsExtractor();
+
+        $urlConfig = is_array($config['url'] ?? null) ? $config['url'] : [];
+        $this->urlGuard = new UrlGuard(
+            (bool) ($urlConfig['allow_private_hosts'] ?? false),
+            is_array($urlConfig['allowed_hosts'] ?? null) ? array_values($urlConfig['allowed_hosts']) : [],
+            (int) ($urlConfig['max_redirects'] ?? 5),
+        );
     }
 
     /**
@@ -91,6 +101,7 @@ class ImageDimensionsService implements ImageDimensionsContract
      *
      * @throws TemporaryFileException
      * @throws UrlAccessException
+     * @throws UrlNotAllowedException
      * @throws InvalidImageException
      */
     public function fromUrl(string $url): Dimensions
@@ -105,6 +116,9 @@ class ImageDimensionsService implements ImageDimensionsContract
         if (!in_array($scheme, ['http', 'https'], true)) {
             throw new InvalidImageException("Only HTTP and HTTPS URLs are supported");
         }
+
+        // SSRF guard: reject private/reserved hosts (unless explicitly allowed).
+        $this->urlGuard->assertAllowed($url);
 
         $cacheKey = $this->getCacheKey('url', $url);
 
@@ -180,7 +194,17 @@ class ImageDimensionsService implements ImageDimensionsContract
             $response = Http::withOptions([
                 ...$this->httpOptions,
                 'stream' => true,
+                'allow_redirects' => [
+                    'max' => $this->urlGuard->maxRedirects(),
+                    'strict' => true,
+                    'referer' => false,
+                    'protocols' => ['http', 'https'],
+                    'on_redirect' => $this->urlGuard->redirectGuard(),
+                ],
             ])->get($url);
+        } catch (UrlNotAllowedException $e) {
+            // A redirect hop pointed at a disallowed host; keep the SSRF verdict.
+            throw $e;
         } catch (Throwable $e) {
             // Connection failures, redirect loops, DNS errors, etc.
             throw UrlAccessException::couldNotOpen($url, $e);

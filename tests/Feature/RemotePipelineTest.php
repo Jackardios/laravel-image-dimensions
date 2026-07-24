@@ -8,8 +8,8 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Jackardios\ImageDimensions\Exceptions\FileTooLargeException;
 use Jackardios\ImageDimensions\Exceptions\InvalidImageException;
-use Jackardios\ImageDimensions\Exceptions\StorageAccessException;
 use Jackardios\ImageDimensions\Exceptions\UrlAccessException;
+use Jackardios\ImageDimensions\Exceptions\UrlNotAllowedException;
 use Jackardios\ImageDimensions\ImageDimensionsService;
 use Jackardios\ImageDimensions\Tests\TestCase;
 use League\Flysystem\Filesystem as Flysystem;
@@ -24,7 +24,23 @@ class RemotePipelineTest extends TestCase
     {
         parent::setUp();
         // Disable caching so each assertion exercises the pipeline afresh.
-        $this->service = new ImageDimensionsService(['enable_cache' => false]);
+        $this->service = $this->makeService();
+    }
+
+    /**
+     * Build a service with caching off and the SSRF guard relaxed (these tests
+     * exercise the transfer pipeline, not host filtering, and must stay
+     * network-free — real DNS resolution is skipped when private hosts are
+     * allowed).
+     *
+     * @param array<string, mixed> $overrides
+     */
+    private function makeService(array $overrides = []): ImageDimensionsService
+    {
+        return new ImageDimensionsService(array_merge([
+            'enable_cache' => false,
+            'url' => ['allow_private_hosts' => true],
+        ], $overrides));
     }
 
     private function pngBytes(int $width, int $height): string
@@ -64,7 +80,7 @@ class RemotePipelineTest extends TestCase
     {
         // remote_read_bytes is tiny, so the header probe is insufficient and the
         // pipeline must continue reading the SAME stream (no second request).
-        $service = new ImageDimensionsService(['enable_cache' => false, 'remote_read_bytes' => 8192]);
+        $service = $this->makeService(['remote_read_bytes' => 8192]);
 
         $url = 'https://example.com/big.png';
         Http::fake([$url => Http::response(Utils::streamFor($this->pngBytes(1000, 1000)), 200)]);
@@ -97,7 +113,7 @@ class RemotePipelineTest extends TestCase
     #[Test]
     public function it_rejects_a_response_whose_content_length_exceeds_the_cap(): void
     {
-        $service = new ImageDimensionsService(['enable_cache' => false, 'max_download_bytes' => 1024]);
+        $service = $this->makeService(['max_download_bytes' => 1024]);
 
         $url = 'https://example.com/huge.bin';
         Http::fake([$url => Http::response('junk', 200, ['Content-Length' => (string) (5 * 1024 * 1024)])]);
@@ -109,11 +125,7 @@ class RemotePipelineTest extends TestCase
     #[Test]
     public function it_rejects_a_stream_that_exceeds_the_cap_without_a_content_length(): void
     {
-        $service = new ImageDimensionsService([
-            'enable_cache' => false,
-            'remote_read_bytes' => 8192,
-            'max_download_bytes' => 16384,
-        ]);
+        $service = $this->makeService(['remote_read_bytes' => 8192, 'max_download_bytes' => 16384]);
 
         $url = 'https://example.com/huge-stream';
         // 1MB of non-image bytes, no Content-Length header.
@@ -146,7 +158,7 @@ class RemotePipelineTest extends TestCase
     #[Test]
     public function it_continues_reading_a_non_local_stream_when_the_header_probe_is_insufficient(): void
     {
-        $service = new ImageDimensionsService(['enable_cache' => false, 'remote_read_bytes' => 8192]);
+        $service = $this->makeService(['remote_read_bytes' => 8192]);
 
         $disk = $this->fakeInMemoryDisk('mem');
         $disk->put('photos/big.png', $this->pngBytes(900, 700));
@@ -162,5 +174,39 @@ class RemotePipelineTest extends TestCase
 
         $this->expectException(InvalidImageException::class);
         $this->service->fromStorage('mem', 'notes.txt');
+    }
+
+    // --- SSRF protection (enabled) ---
+
+    #[Test]
+    public function it_blocks_a_private_url_before_issuing_any_request(): void
+    {
+        Http::fake();
+        $service = new ImageDimensionsService([
+            'enable_cache' => false,
+            'url' => ['allow_private_hosts' => false],
+        ]);
+
+        try {
+            $service->fromUrl('http://127.0.0.1/internal.png');
+            $this->fail('Expected a UrlNotAllowedException.');
+        } catch (UrlNotAllowedException $e) {
+            $this->addToAssertionCount(1);
+        }
+
+        Http::assertNothingSent();
+    }
+
+    #[Test]
+    public function the_ssrf_rejection_is_catchable_as_a_url_access_exception(): void
+    {
+        Http::fake();
+        $service = new ImageDimensionsService([
+            'enable_cache' => false,
+            'url' => ['allow_private_hosts' => false],
+        ]);
+
+        $this->expectException(UrlAccessException::class);
+        $service->fromUrl('http://169.254.169.254/latest/meta-data/');
     }
 }
