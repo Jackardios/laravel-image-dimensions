@@ -1,4 +1,4 @@
-<?php
+<?php declare(strict_types=1);
 
 namespace Jackardios\ImageDimensions\Tests\Unit;
 
@@ -14,6 +14,7 @@ use Jackardios\ImageDimensions\Exceptions\UrlAccessException;
 use Jackardios\ImageDimensions\ImageDimensionsService;
 use Jackardios\ImageDimensions\Tests\TestCase;
 use Mockery;
+use PHPUnit\Framework\Attributes\Test;
 
 class ExceptionHandlingTest extends TestCase
 {
@@ -53,16 +54,20 @@ class ExceptionHandlingTest extends TestCase
 
     // --- Local File Exceptions ---
 
-    /** @test */
+    #[Test]
     public function it_throws_for_non_existent_local_file(): void
     {
         $this->expectException(FileNotFoundException::class);
         $this->service->fromLocal($this->testFilesPath . '/non-existent.jpg');
     }
 
-    /** @test */
+    #[Test]
     public function it_throws_for_unreadable_local_file(): void
     {
+        if (function_exists('posix_geteuid') && posix_geteuid() === 0) {
+            $this->markTestSkipped('File permission checks are ineffective when running as root.');
+        }
+
         $path = $this->testFilesPath . '/unreadable.jpg';
         touch($path);
         chmod($path, 0000); // Make the file unreadable
@@ -77,7 +82,7 @@ class ExceptionHandlingTest extends TestCase
         }
     }
 
-    /** @test */
+    #[Test]
     public function it_throws_for_corrupted_image_file(): void
     {
         $path = $this->testFilesPath . '/corrupted.jpg';
@@ -87,7 +92,7 @@ class ExceptionHandlingTest extends TestCase
         $this->service->fromLocal($path);
     }
 
-    /** @test */
+    #[Test]
     public function it_throws_for_empty_local_file(): void
     {
         $path = $this->testFilesPath . '/empty.png';
@@ -100,7 +105,7 @@ class ExceptionHandlingTest extends TestCase
 
     // --- URL Exceptions ---
 
-    /** @test */
+    #[Test]
     public function it_throws_for_invalid_url_format(): void
     {
         $this->expectException(InvalidImageException::class);
@@ -108,7 +113,7 @@ class ExceptionHandlingTest extends TestCase
         $this->service->fromUrl('not-a-valid-url');
     }
 
-    /** @test */
+    #[Test]
     public function it_throws_for_http_request_failure( ): void
     {
         $url = 'https://example.com/not-found.jpg';
@@ -119,7 +124,7 @@ class ExceptionHandlingTest extends TestCase
         $this->service->fromUrl($url);
     }
 
-    /** @test */
+    #[Test]
     public function it_throws_for_network_connection_timeout(): void
     {
         $url = 'https://example.com/timeout.jpg';
@@ -132,7 +137,7 @@ class ExceptionHandlingTest extends TestCase
         $this->service->fromUrl($url);
     }
 
-    /** @test */
+    #[Test]
     public function it_throws_for_too_many_redirects(): void
     {
         $url = 'https://example.com/redirect-loop';
@@ -144,7 +149,7 @@ class ExceptionHandlingTest extends TestCase
 
     // --- Storage Exceptions ---
 
-    /** @test */
+    #[Test]
     public function it_throws_for_non_existent_storage_disk(): void
     {
         $this->expectException(InvalidImageException::class);
@@ -152,7 +157,7 @@ class ExceptionHandlingTest extends TestCase
         $this->service->fromStorage('non-existent-disk', 'image.jpg');
     }
 
-    /** @test */
+    #[Test]
     public function it_throws_for_non_existent_file_on_storage_disk(): void
     {
         Storage::fake('test-disk');
@@ -160,7 +165,7 @@ class ExceptionHandlingTest extends TestCase
         $this->service->fromStorage('test-disk', 'non-existent.jpg');
     }
 
-    /** @test */
+    #[Test]
     public function it_throws_if_storage_stream_cannot_be_read(): void
     {
         $diskName = 's3_mock';
@@ -179,7 +184,7 @@ class ExceptionHandlingTest extends TestCase
         $this->service->fromStorage($diskName, $path);
     }
 
-    /** @test */
+    #[Test]
     public function it_throws_if_storage_full_content_cannot_be_read_after_partial_failure(): void
     {
 
@@ -205,7 +210,7 @@ class ExceptionHandlingTest extends TestCase
 
     // --- Configuration Exceptions ---
 
-    /** @test */
+    #[Test]
     public function it_throws_if_temp_dir_is_not_writable_when_processing_url(): void
     {
         $invalidDir = $this->testFilesPath . '/unwritable';

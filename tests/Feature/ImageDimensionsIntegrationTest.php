@@ -1,4 +1,4 @@
-<?php
+<?php declare(strict_types=1);
 
 namespace Jackardios\ImageDimensions\Tests\Feature;
 
@@ -13,6 +13,7 @@ use Jackardios\ImageDimensions\Facades\ImageDimensions;
 use Jackardios\ImageDimensions\ImageDimensionsService;
 use Jackardios\ImageDimensions\Providers\ImageDimensionsServiceProvider;
 use Jackardios\ImageDimensions\Tests\TestCase;
+use PHPUnit\Framework\Attributes\Test;
 use ReflectionClass;
 
 class ImageDimensionsIntegrationTest extends TestCase
@@ -22,8 +23,6 @@ class ImageDimensionsIntegrationTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-
-        $this->app->register(ImageDimensionsServiceProvider::class);
 
         $this->testFilesPath = storage_path('app/test-images');
         if (!is_dir($this->testFilesPath)) {
@@ -37,11 +36,6 @@ class ImageDimensionsIntegrationTest extends TestCase
     {
         $this->cleanupTestImages();
         parent::tearDown();
-    }
-
-    protected function getPackageProviders($app): array
-    {
-        return [ImageDimensionsServiceProvider::class];
     }
 
     protected function createTestImages(): void
@@ -72,14 +66,14 @@ class ImageDimensionsIntegrationTest extends TestCase
         }
     }
 
-    /** @test */
+    #[Test]
     public function it_registers_the_service_provider_and_facade(): void
     {
         $this->assertInstanceOf(ImageDimensionsService::class, $this->app->make('image-dimensions'));
         $this->assertInstanceOf(ImageDimensionsService::class, ImageDimensions::getFacadeRoot());
     }
 
-    /** @test */
+    #[Test]
     public function it_correctly_uses_the_facade_to_get_dimensions(): void
     {
         $result = ImageDimensions::fromLocal($this->testFilesPath . '/test.png');
@@ -87,7 +81,7 @@ class ImageDimensionsIntegrationTest extends TestCase
         $this->assertEquals(['width' => 800, 'height' => 600], $result);
     }
 
-    /** @test */
+    #[Test]
     public function it_publishes_the_configuration_file(): void
     {
         $configPath = config_path('image-dimensions.php');
@@ -98,7 +92,7 @@ class ImageDimensionsIntegrationTest extends TestCase
         $this->assertFileExists($configPath);
     }
 
-    /** @test */
+    #[Test]
     public function it_uses_values_from_the_configuration(): void
     {
         Config::set('image-dimensions.remote_read_bytes', 16384);
@@ -116,7 +110,7 @@ class ImageDimensionsIntegrationTest extends TestCase
         $this->assertFalse($enableCacheProp->getValue($service));
     }
 
-    /** @test */
+    #[Test]
     public function it_gets_dimensions_from_a_local_laravel_storage_disk(): void
     {
         Storage::fake('images');
@@ -127,7 +121,7 @@ class ImageDimensionsIntegrationTest extends TestCase
         $this->assertEquals(['width' => 800, 'height' => 600], $result);
     }
 
-    /** @test */
+    #[Test]
     public function it_gets_dimensions_from_a_remote_laravel_storage_disk(): void
     {
         Storage::fake('s3');
@@ -138,7 +132,7 @@ class ImageDimensionsIntegrationTest extends TestCase
         $this->assertEquals(['width' => 1920, 'height' => 1080], $result);
     }
 
-    /** @test */
+    #[Test]
     public function it_throws_exception_if_temp_directory_is_not_writable(): void
     {
         $unwritableDir = $this->testFilesPath . '/unwritable';
@@ -159,7 +153,7 @@ class ImageDimensionsIntegrationTest extends TestCase
         }
     }
 
-    /** @test */
+    #[Test]
     public function it_works_with_different_cache_drivers(): void
     {
         $path = $this->testFilesPath . '/test.png';
@@ -176,7 +170,7 @@ class ImageDimensionsIntegrationTest extends TestCase
         $this->assertTrue(Cache::has('image_dimensions:local:' . md5(realpath($path)) . ':' . filemtime($path)));
     }
 
-    /** @test */
+    #[Test]
     public function it_handles_malformed_svg_files(): void
     {
         $malformedSvg = '<?xml version="1.0"?><svg><rect>';
@@ -187,7 +181,7 @@ class ImageDimensionsIntegrationTest extends TestCase
         ImageDimensions::fromLocal($path);
     }
 
-    /** @test */
+    #[Test]
     public function it_falls_back_to_viewbox_for_svg_with_percentage_dimensions(): void
     {
         $svg = '<svg width="100%" height="100%" viewBox="0 0 200 150"><rect width="100%" height="100%"/></svg>';
@@ -199,7 +193,7 @@ class ImageDimensionsIntegrationTest extends TestCase
         $this->assertEquals(['width' => 200, 'height' => 150], $result);
     }
 
-    /** @test */
+    #[Test]
     public function it_handles_various_mime_types_and_extensions_correctly(): void
     {
         // Copy the PNG file with the JPG extension
