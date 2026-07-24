@@ -6,6 +6,7 @@ use DOMDocument;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
+use Jackardios\ImageDimensions\Contracts\ImageDimensions as ImageDimensionsContract;
 use Jackardios\ImageDimensions\Exceptions\FileNotFoundException;
 use Jackardios\ImageDimensions\Exceptions\InvalidImageException;
 use Jackardios\ImageDimensions\Exceptions\StorageAccessException;
@@ -14,18 +15,24 @@ use Jackardios\ImageDimensions\Exceptions\UrlAccessException;
 use League\Flysystem\Local\LocalFilesystemAdapter;
 use Throwable;
 
-class ImageDimensionsService
+class ImageDimensionsService implements ImageDimensionsContract
 {
     protected int $remoteReadBytes;
     protected string $tempDir;
     protected bool $enableCache;
     protected int $cacheTtl;
     protected int $svgMaxFileSize;
+    /** @var array{timeout: int, connect_timeout: int, verify: bool} */
     protected array $httpOptions;
 
-    public function __construct()
+    /**
+     * @param array<string, mixed>|null $config Package config. When null, falls
+     *        back to the global `image-dimensions` config. Values are captured
+     *        at construction time.
+     */
+    public function __construct(?array $config = null)
     {
-        $config = config("image-dimensions", []);
+        $config ??= config('image-dimensions', []);
 
         $this->remoteReadBytes = max(8192, min(1048576, (int) ($config['remote_read_bytes'] ?? 131072))); // 8KB-1MB
         $this->tempDir = $config['temp_dir'] ?? sys_get_temp_dir();
@@ -42,12 +49,10 @@ class ImageDimensionsService
     /**
      * Get image dimensions from a local file.
      *
-     * @param string $path
-     * @return array{width: int, height: int}
      * @throws FileNotFoundException
      * @throws InvalidImageException
      */
-    public function fromLocal(string $path): array
+    public function fromLocal(string $path): Dimensions
     {
         $path = trim($path);
 
@@ -75,13 +80,11 @@ class ImageDimensionsService
     /**
      * Get image dimensions from a URL.
      *
-     * @param string $url
-     * @return array{width: int, height: int}
      * @throws TemporaryFileException
      * @throws UrlAccessException
      * @throws InvalidImageException
      */
-    public function fromUrl(string $url): array
+    public function fromUrl(string $url): Dimensions
     {
         $url = trim($url);
 
@@ -104,15 +107,12 @@ class ImageDimensionsService
     /**
      * Get image dimensions from a Laravel Storage file.
      *
-     * @param string $diskName
-     * @param string $path
-     * @return array{width: int, height: int}
      * @throws FileNotFoundException
      * @throws TemporaryFileException
      * @throws StorageAccessException
      * @throws InvalidImageException
      */
-    public function fromStorage(string $diskName, string $path): array
+    public function fromStorage(string $diskName, string $path): Dimensions
     {
         $diskName = trim($diskName);
         $path = trim($path);
@@ -499,16 +499,18 @@ class ImageDimensionsService
     /**
      * Get cached value or compute and cache.
      *
-     * @param string $key
-     * @param callable $callback
-     * @return array{width: int, height: int}
+     * The callback returns a primitive `array{width, height}` so cache stores
+     * hold plain data (v1-compatible); the result is hydrated into a
+     * {@see Dimensions} value object before returning.
+     *
+     * @param callable(): array{width: int, height: int} $callback
      */
-    protected function getCachedOrCompute(string $key, callable $callback): array
+    protected function getCachedOrCompute(string $key, callable $callback): Dimensions
     {
         if (!$this->enableCache) {
-            return $callback();
+            return Dimensions::fromArray($callback());
         }
 
-        return Cache::remember($key, $this->cacheTtl, $callback);
+        return Dimensions::fromArray(Cache::remember($key, $this->cacheTtl, $callback));
     }
 }

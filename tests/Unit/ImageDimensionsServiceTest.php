@@ -63,21 +63,21 @@ class ImageDimensionsServiceTest extends TestCase
     public function it_gets_dimensions_from_local_png(): void
     {
         $result = $this->service->fromLocal($this->fixturesPath . '/test.png');
-        $this->assertEquals(['width' => 100, 'height' => 200], $result);
+        $this->assertDimensions(100, 200, $result);
     }
 
     #[Test]
     public function it_gets_dimensions_from_local_jpeg(): void
     {
         $result = $this->service->fromLocal($this->fixturesPath . '/test.jpg');
-        $this->assertEquals(['width' => 300, 'height' => 400], $result);
+        $this->assertDimensions(300, 400, $result);
     }
 
     #[Test]
     public function it_gets_dimensions_from_local_gif(): void
     {
         $result = $this->service->fromLocal($this->fixturesPath . '/test.gif');
-        $this->assertEquals(['width' => 150, 'height' => 250], $result);
+        $this->assertDimensions(150, 250, $result);
     }
 
     #[Test]
@@ -122,35 +122,35 @@ class ImageDimensionsServiceTest extends TestCase
         $this->createdFiles[] = $linkPath;
 
         $result = $this->service->fromLocal($linkPath);
-        $this->assertEquals(['width' => 100, 'height' => 200], $result);
+        $this->assertDimensions(100, 200, $result);
     }
 
     #[Test]
     public function it_gets_dimensions_from_svg_with_width_height(): void
     {
         $result = $this->service->fromLocal($this->fixturesPath . '/test.svg');
-        $this->assertEquals(['width' => 500, 'height' => 600], $result);
+        $this->assertDimensions(500, 600, $result);
     }
 
     #[Test]
     public function it_gets_dimensions_from_svg_with_px_units(): void
     {
         $result = $this->service->fromLocal($this->fixturesPath . '/test-px.svg');
-        $this->assertEquals(['width' => 150, 'height' => 250], $result);
+        $this->assertDimensions(150, 250, $result);
     }
 
     #[Test]
     public function it_falls_back_to_viewbox_for_svg_without_dimensions(): void
     {
         $result = $this->service->fromLocal($this->fixturesPath . '/test-viewbox.svg');
-        $this->assertEquals(['width' => 400, 'height' => 300], $result);
+        $this->assertDimensions(400, 300, $result);
     }
 
     #[Test]
     public function it_falls_back_to_viewbox_for_svg_with_percentage_dimensions(): void
     {
         $result = $this->service->fromLocal($this->fixturesPath . '/test-percent.svg');
-        $this->assertEquals(['width' => 800, 'height' => 600], $result);
+        $this->assertDimensions(800, 600, $result);
     }
 
     #[Test]
@@ -188,7 +188,7 @@ class ImageDimensionsServiceTest extends TestCase
         $this->createdFiles[] = $path;
 
         $result = $this->service->fromLocal($path);
-        $this->assertEquals(['width' => 100, 'height' => 100], $result);
+        $this->assertDimensions(100, 100, $result);
     }
 
     #[Test]
@@ -238,7 +238,7 @@ class ImageDimensionsServiceTest extends TestCase
         ]);
 
         $result = $this->service->fromUrl($url);
-        $this->assertEquals(['width' => 100, 'height' => 200], $result);
+        $this->assertDimensions(100, 200, $result);
     }
 
     #[Test]
@@ -271,7 +271,7 @@ class ImageDimensionsServiceTest extends TestCase
         ]);
 
         $result = $this->service->fromUrl($redirectUrl);
-        $this->assertEquals(['width' => 300, 'height' => 400], $result);
+        $this->assertDimensions(300, 400, $result);
     }
 
     #[Test]
@@ -306,7 +306,7 @@ class ImageDimensionsServiceTest extends TestCase
         Storage::disk('test-disk')->put('image.jpg', $imageData);
 
         $result = $this->service->fromStorage('test-disk', 'image.jpg');
-        $this->assertEquals(['width' => 300, 'height' => 400], $result);
+        $this->assertDimensions(300, 400, $result);
     }
 
     #[Test]
@@ -332,7 +332,7 @@ class ImageDimensionsServiceTest extends TestCase
             ->andReturn(['width' => 100, 'height' => 200]);
 
         $result = $this->service->fromLocal($path);
-        $this->assertEquals(['width' => 100, 'height' => 200], $result);
+        $this->assertDimensions(100, 200, $result);
     }
 
     #[Test]
@@ -344,7 +344,7 @@ class ImageDimensionsServiceTest extends TestCase
         Cache::shouldReceive('remember')->never();
 
         $result = $service->fromLocal($this->fixturesPath . '/test.png');
-        $this->assertEquals(['width' => 100, 'height' => 200], $result);
+        $this->assertDimensions(100, 200, $result);
     }
 
     #[Test]
@@ -356,7 +356,7 @@ class ImageDimensionsServiceTest extends TestCase
         $this->createdFiles[] = $destPath;
 
         $result = $this->service->fromLocal($destPath);
-        $this->assertEquals(['width' => 100, 'height' => 200], $result);
+        $this->assertDimensions(100, 200, $result);
     }
 
     #[Test]
@@ -381,6 +381,6 @@ class ImageDimensionsServiceTest extends TestCase
     public function it_handles_webp_format(): void
     {
         $result = $this->service->fromLocal($this->fixturesPath . '/test.webp');
-        $this->assertEquals(['width' => 200, 'height' => 300], $result);
+        $this->assertDimensions(200, 300, $result);
     }
 }

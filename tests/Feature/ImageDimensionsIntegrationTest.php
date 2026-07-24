@@ -11,7 +11,6 @@ use Jackardios\ImageDimensions\Exceptions\InvalidImageException;
 use Jackardios\ImageDimensions\Exceptions\TemporaryFileException;
 use Jackardios\ImageDimensions\Facades\ImageDimensions;
 use Jackardios\ImageDimensions\ImageDimensionsService;
-use Jackardios\ImageDimensions\Providers\ImageDimensionsServiceProvider;
 use Jackardios\ImageDimensions\Tests\TestCase;
 use PHPUnit\Framework\Attributes\Test;
 use ReflectionClass;
@@ -78,7 +77,7 @@ class ImageDimensionsIntegrationTest extends TestCase
     {
         $result = ImageDimensions::fromLocal($this->testFilesPath . '/test.png');
 
-        $this->assertEquals(['width' => 800, 'height' => 600], $result);
+        $this->assertDimensions(800, 600, $result);
     }
 
     #[Test]
@@ -118,7 +117,7 @@ class ImageDimensionsIntegrationTest extends TestCase
 
         $result = ImageDimensions::fromStorage('images', 'test.png');
 
-        $this->assertEquals(['width' => 800, 'height' => 600], $result);
+        $this->assertDimensions(800, 600, $result);
     }
 
     #[Test]
@@ -129,7 +128,7 @@ class ImageDimensionsIntegrationTest extends TestCase
 
         $result = ImageDimensions::fromStorage('s3', 'images/test.svg');
 
-        $this->assertEquals(['width' => 1920, 'height' => 1080], $result);
+        $this->assertDimensions(1920, 1080, $result);
     }
 
     #[Test]
@@ -157,17 +156,17 @@ class ImageDimensionsIntegrationTest extends TestCase
     public function it_works_with_different_cache_drivers(): void
     {
         $path = $this->testFilesPath . '/test.png';
-        $expected = ['width' => 800, 'height' => 600];
+        $cacheKey = 'image_dimensions:local:' . md5(realpath($path)) . ':' . filemtime($path);
 
         Config::set('cache.default', 'array');
         Cache::flush();
-        $this->assertEquals($expected, ImageDimensions::fromLocal($path));
-        $this->assertTrue(Cache::has('image_dimensions:local:' . md5(realpath($path)) . ':' . filemtime($path)));
+        $this->assertDimensions(800, 600, ImageDimensions::fromLocal($path));
+        $this->assertTrue(Cache::has($cacheKey));
 
         Config::set('cache.default', 'file');
         Cache::flush();
-        $this->assertEquals($expected, ImageDimensions::fromLocal($path));
-        $this->assertTrue(Cache::has('image_dimensions:local:' . md5(realpath($path)) . ':' . filemtime($path)));
+        $this->assertDimensions(800, 600, ImageDimensions::fromLocal($path));
+        $this->assertTrue(Cache::has($cacheKey));
     }
 
     #[Test]
@@ -190,7 +189,7 @@ class ImageDimensionsIntegrationTest extends TestCase
 
         $result = ImageDimensions::fromLocal($path);
 
-        $this->assertEquals(['width' => 200, 'height' => 150], $result);
+        $this->assertDimensions(200, 150, $result);
     }
 
     #[Test]
@@ -203,6 +202,6 @@ class ImageDimensionsIntegrationTest extends TestCase
 
         // The library should determine the size by the content, not by the extension
         $result = ImageDimensions::fromLocal($destPath);
-        $this->assertEquals(['width' => 800, 'height' => 600], $result);
+        $this->assertDimensions(800, 600, $result);
     }
 }
