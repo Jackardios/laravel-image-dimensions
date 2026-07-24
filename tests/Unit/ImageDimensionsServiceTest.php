@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Jackardios\ImageDimensions\Tests\Unit;
 
@@ -19,15 +21,16 @@ class ImageDimensionsServiceTest extends TestCase
     use CreatesTestImages;
 
     protected ImageDimensionsService $service;
+
     protected string $fixturesPath;
 
     protected function setUp(): void
     {
         parent::setUp();
-        $this->service = new ImageDimensionsService();
-        $this->fixturesPath = sys_get_temp_dir() . '/imgdim_test_' . uniqid();
+        $this->service = new ImageDimensionsService;
+        $this->fixturesPath = sys_get_temp_dir().'/imgdim_test_'.uniqid();
 
-        if (!is_dir($this->fixturesPath)) {
+        if (! is_dir($this->fixturesPath)) {
             mkdir($this->fixturesPath, 0777, true);
         }
 
@@ -52,31 +55,31 @@ class ImageDimensionsServiceTest extends TestCase
         $this->createSvg($this->fixturesPath, 'test-px.svg', ['width' => '150px', 'height' => '250px']);
         $this->createSvg($this->fixturesPath, 'test-percent.svg', ['width' => '100%', 'height' => '100%', 'viewBox' => '0 0 800 600']);
 
-        file_put_contents($this->fixturesPath . '/invalid.jpg', 'not an image');
-        touch($this->fixturesPath . '/empty.png');
+        file_put_contents($this->fixturesPath.'/invalid.jpg', 'not an image');
+        touch($this->fixturesPath.'/empty.png');
 
-        $this->createdFiles[] = $this->fixturesPath . '/invalid.jpg';
-        $this->createdFiles[] = $this->fixturesPath . '/empty.png';
+        $this->createdFiles[] = $this->fixturesPath.'/invalid.jpg';
+        $this->createdFiles[] = $this->fixturesPath.'/empty.png';
     }
 
     #[Test]
     public function it_gets_dimensions_from_local_png(): void
     {
-        $result = $this->service->fromLocal($this->fixturesPath . '/test.png');
+        $result = $this->service->fromLocal($this->fixturesPath.'/test.png');
         $this->assertDimensions(100, 200, $result);
     }
 
     #[Test]
     public function it_gets_dimensions_from_local_jpeg(): void
     {
-        $result = $this->service->fromLocal($this->fixturesPath . '/test.jpg');
+        $result = $this->service->fromLocal($this->fixturesPath.'/test.jpg');
         $this->assertDimensions(300, 400, $result);
     }
 
     #[Test]
     public function it_gets_dimensions_from_local_gif(): void
     {
-        $result = $this->service->fromLocal($this->fixturesPath . '/test.gif');
+        $result = $this->service->fromLocal($this->fixturesPath.'/test.gif');
         $this->assertDimensions(150, 250, $result);
     }
 
@@ -84,7 +87,7 @@ class ImageDimensionsServiceTest extends TestCase
     public function it_throws_exception_for_non_existent_local_file(): void
     {
         $this->expectException(FileNotFoundException::class);
-        $this->service->fromLocal($this->fixturesPath . '/non-existent.jpg');
+        $this->service->fromLocal($this->fixturesPath.'/non-existent.jpg');
     }
 
     #[Test]
@@ -100,14 +103,14 @@ class ImageDimensionsServiceTest extends TestCase
     {
         $this->expectException(InvalidImageException::class);
         $this->expectExceptionMessage('File is empty');
-        $this->service->fromLocal($this->fixturesPath . '/empty.png');
+        $this->service->fromLocal($this->fixturesPath.'/empty.png');
     }
 
     #[Test]
     public function it_throws_exception_for_invalid_image_file(): void
     {
         $this->expectException(InvalidImageException::class);
-        $this->service->fromLocal($this->fixturesPath . '/invalid.jpg');
+        $this->service->fromLocal($this->fixturesPath.'/invalid.jpg');
     }
 
     #[Test]
@@ -117,8 +120,8 @@ class ImageDimensionsServiceTest extends TestCase
             $this->markTestSkipped('Symbolic links test skipped on Windows');
         }
 
-        $linkPath = $this->fixturesPath . '/link.png';
-        symlink($this->fixturesPath . '/test.png', $linkPath);
+        $linkPath = $this->fixturesPath.'/link.png';
+        symlink($this->fixturesPath.'/test.png', $linkPath);
         $this->createdFiles[] = $linkPath;
 
         $result = $this->service->fromLocal($linkPath);
@@ -128,28 +131,28 @@ class ImageDimensionsServiceTest extends TestCase
     #[Test]
     public function it_gets_dimensions_from_svg_with_width_height(): void
     {
-        $result = $this->service->fromLocal($this->fixturesPath . '/test.svg');
+        $result = $this->service->fromLocal($this->fixturesPath.'/test.svg');
         $this->assertDimensions(500, 600, $result);
     }
 
     #[Test]
     public function it_gets_dimensions_from_svg_with_px_units(): void
     {
-        $result = $this->service->fromLocal($this->fixturesPath . '/test-px.svg');
+        $result = $this->service->fromLocal($this->fixturesPath.'/test-px.svg');
         $this->assertDimensions(150, 250, $result);
     }
 
     #[Test]
     public function it_falls_back_to_viewbox_for_svg_without_dimensions(): void
     {
-        $result = $this->service->fromLocal($this->fixturesPath . '/test-viewbox.svg');
+        $result = $this->service->fromLocal($this->fixturesPath.'/test-viewbox.svg');
         $this->assertDimensions(400, 300, $result);
     }
 
     #[Test]
     public function it_falls_back_to_viewbox_for_svg_with_percentage_dimensions(): void
     {
-        $result = $this->service->fromLocal($this->fixturesPath . '/test-percent.svg');
+        $result = $this->service->fromLocal($this->fixturesPath.'/test-percent.svg');
         $this->assertDimensions(800, 600, $result);
     }
 
@@ -166,7 +169,7 @@ class ImageDimensionsServiceTest extends TestCase
     #[Test]
     public function it_throws_exception_for_malformed_svg(): void
     {
-        $path = $this->fixturesPath . '/malformed.svg';
+        $path = $this->fixturesPath.'/malformed.svg';
         file_put_contents($path, '<?xml version="1.0"?><svg><rect/>');
         $this->createdFiles[] = $path;
 
@@ -177,13 +180,13 @@ class ImageDimensionsServiceTest extends TestCase
     #[Test]
     public function it_sanitizes_dangerous_svg_content(): void
     {
-        $dangerousSvg = '<?xml version="1.0"?>' .
-            '<svg width="100" height="100" xmlns="http://www.w3.org/2000/svg">' .
-            '<script>alert("XSS")</script>' .
-            '<rect onclick="alert(1)" width="100" height="100"/>' .
+        $dangerousSvg = '<?xml version="1.0"?>'.
+            '<svg width="100" height="100" xmlns="http://www.w3.org/2000/svg">'.
+            '<script>alert("XSS")</script>'.
+            '<rect onclick="alert(1)" width="100" height="100"/>'.
             '</svg>';
 
-        $path = $this->fixturesPath . '/dangerous.svg';
+        $path = $this->fixturesPath.'/dangerous.svg';
         file_put_contents($path, $dangerousSvg);
         $this->createdFiles[] = $path;
 
@@ -198,7 +201,7 @@ class ImageDimensionsServiceTest extends TestCase
         $largeSvg .= str_repeat('<rect width="1" height="1"/>', 500000);
         $largeSvg .= '</svg>';
 
-        $path = $this->fixturesPath . '/large.svg';
+        $path = $this->fixturesPath.'/large.svg';
         file_put_contents($path, $largeSvg);
         $this->createdFiles[] = $path;
 
@@ -227,7 +230,7 @@ class ImageDimensionsServiceTest extends TestCase
     public function it_gets_dimensions_from_valid_url(): void
     {
         $url = 'https://example.com/image.png';
-        $imageData = file_get_contents($this->fixturesPath . '/test.png');
+        $imageData = file_get_contents($this->fixturesPath.'/test.png');
 
         Http::fake([
             $url => Http::response(
@@ -259,7 +262,7 @@ class ImageDimensionsServiceTest extends TestCase
     {
         $redirectUrl = 'https://example.com/redirect.jpg';
         $finalUrl = 'https://example.com/image.jpg';
-        $imageData = file_get_contents($this->fixturesPath . '/test.jpg');
+        $imageData = file_get_contents($this->fixturesPath.'/test.jpg');
 
         Http::fake([
             $redirectUrl => Http::response(null, 302, ['Location' => $finalUrl]),
@@ -302,7 +305,7 @@ class ImageDimensionsServiceTest extends TestCase
     public function it_gets_dimensions_from_storage_file(): void
     {
         Storage::fake('test-disk');
-        $imageData = file_get_contents($this->fixturesPath . '/test.jpg');
+        $imageData = file_get_contents($this->fixturesPath.'/test.jpg');
         Storage::disk('test-disk')->put('image.jpg', $imageData);
 
         $result = $this->service->fromStorage('test-disk', 'image.jpg');
@@ -323,8 +326,8 @@ class ImageDimensionsServiceTest extends TestCase
     {
         config(['image-dimensions.enable_cache' => true]);
 
-        $path = $this->fixturesPath . '/test.png';
-        $cacheKey = 'image_dimensions:v2:local:' . md5(realpath($path)) . ':' . filemtime($path);
+        $path = $this->fixturesPath.'/test.png';
+        $cacheKey = 'image_dimensions:v2:local:'.md5(realpath($path)).':'.filemtime($path);
 
         Cache::shouldReceive('remember')
             ->once()
@@ -339,19 +342,19 @@ class ImageDimensionsServiceTest extends TestCase
     public function it_does_not_use_cache_when_disabled(): void
     {
         config(['image-dimensions.enable_cache' => false]);
-        $service = new ImageDimensionsService();
+        $service = new ImageDimensionsService;
 
         Cache::shouldReceive('remember')->never();
 
-        $result = $service->fromLocal($this->fixturesPath . '/test.png');
+        $result = $service->fromLocal($this->fixturesPath.'/test.png');
         $this->assertDimensions(100, 200, $result);
     }
 
     #[Test]
     public function it_correctly_reads_image_with_wrong_extension(): void
     {
-        $sourcePath = $this->fixturesPath . '/test.png';
-        $destPath = $this->fixturesPath . '/fake.jpg';
+        $sourcePath = $this->fixturesPath.'/test.png';
+        $destPath = $this->fixturesPath.'/fake.jpg';
         copy($sourcePath, $destPath);
         $this->createdFiles[] = $destPath;
 
@@ -363,7 +366,7 @@ class ImageDimensionsServiceTest extends TestCase
     public function it_validates_configuration_bounds(): void
     {
         config(['image-dimensions.remote_read_bytes' => 100]);
-        $service1 = new ImageDimensionsService();
+        $service1 = new ImageDimensionsService;
 
         $reflection = new \ReflectionClass($service1);
         $prop = $reflection->getProperty('remoteReadBytes');
@@ -372,7 +375,7 @@ class ImageDimensionsServiceTest extends TestCase
         $this->assertGreaterThanOrEqual(8192, $prop->getValue($service1));
 
         config(['image-dimensions.remote_read_bytes' => 10000000]);
-        $service2 = new ImageDimensionsService();
+        $service2 = new ImageDimensionsService;
 
         $this->assertLessThanOrEqual(1048576, $prop->getValue($service2));
     }
@@ -380,7 +383,7 @@ class ImageDimensionsServiceTest extends TestCase
     #[Test]
     public function it_handles_webp_format(): void
     {
-        $result = $this->service->fromLocal($this->fixturesPath . '/test.webp');
+        $result = $this->service->fromLocal($this->fixturesPath.'/test.webp');
         $this->assertDimensions(200, 300, $result);
     }
 
@@ -394,7 +397,7 @@ class ImageDimensionsServiceTest extends TestCase
     #[Test]
     public function it_reads_viewbox_with_a_non_zero_origin_through_from_local(): void
     {
-        $path = $this->fixturesPath . '/vb-origin.svg';
+        $path = $this->fixturesPath.'/vb-origin.svg';
         file_put_contents($path, '<svg xmlns="http://www.w3.org/2000/svg" viewBox="10 20 400 300"><rect/></svg>');
         $this->createdFiles[] = $path;
 
@@ -404,7 +407,7 @@ class ImageDimensionsServiceTest extends TestCase
     #[Test]
     public function it_reads_a_namespace_prefixed_svg_through_from_local(): void
     {
-        $path = $this->fixturesPath . '/ns.svg';
+        $path = $this->fixturesPath.'/ns.svg';
         file_put_contents(
             $path,
             '<svg:svg xmlns:svg="http://www.w3.org/2000/svg" width="120" height="90"><svg:rect/></svg:svg>'

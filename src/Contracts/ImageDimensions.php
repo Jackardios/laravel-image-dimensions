@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Jackardios\ImageDimensions\Contracts;
 
@@ -50,7 +52,8 @@ interface ImageDimensions
     /**
      * Get image dimensions from an open, readable stream resource.
      *
-     * @param resource $stream
+     * @param  resource  $stream
+     *
      * @throws TemporaryFileException
      * @throws InvalidImageException
      */
@@ -79,7 +82,7 @@ interface ImageDimensions
     /**
      * Non-throwing variant of {@see fromStream()}.
      *
-     * @param resource $stream
+     * @param  resource  $stream
      */
     public function tryFromStream($stream): ?Dimensions;
 

@@ -1,14 +1,18 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Jackardios\ImageDimensions;
 
+use Closure;
+use Illuminate\Contracts\Filesystem\Filesystem;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Jackardios\ImageDimensions\Contracts\ImageDimensions as ImageDimensionsContract;
 use Jackardios\ImageDimensions\Exceptions\FileNotFoundException;
-use Jackardios\ImageDimensions\Exceptions\ImageDimensionsException;
 use Jackardios\ImageDimensions\Exceptions\FileTooLargeException;
+use Jackardios\ImageDimensions\Exceptions\ImageDimensionsException;
 use Jackardios\ImageDimensions\Exceptions\InvalidImageException;
 use Jackardios\ImageDimensions\Exceptions\StorageAccessException;
 use Jackardios\ImageDimensions\Exceptions\TemporaryFileException;
@@ -24,20 +28,28 @@ use Throwable;
 class ImageDimensionsService implements ImageDimensionsContract
 {
     protected int $remoteReadBytes;
+
     protected int $maxDownloadBytes;
+
     protected string $tempDir;
+
     protected bool $enableCache;
+
     protected ?int $cacheTtl;
+
     protected int $svgMaxFileSize;
+
     /** @var array{timeout: int, connect_timeout: int, verify: bool} */
     protected array $httpOptions;
+
     protected SvgDimensionsExtractor $svgExtractor;
+
     protected UrlGuard $urlGuard;
 
     /**
-     * @param array<string, mixed>|null $config Package config. When null, falls
-     *        back to the global `image-dimensions` config. Values are captured
-     *        at construction time.
+     * @param  array<string, mixed>|null  $config  Package config. When null, falls
+     *                                             back to the global `image-dimensions` config. Values are captured
+     *                                             at construction time.
      */
     public function __construct(?array $config = null)
     {
@@ -58,7 +70,7 @@ class ImageDimensionsService implements ImageDimensionsContract
             'connect_timeout' => max(0, (int) ($config['http']['connect_timeout'] ?? 10)),
             'verify' => (bool) ($config['http']['verify_ssl'] ?? true),
         ];
-        $this->svgExtractor = new SvgDimensionsExtractor();
+        $this->svgExtractor = new SvgDimensionsExtractor;
 
         $urlConfig = is_array($config['url'] ?? null) ? $config['url'] : [];
         $this->urlGuard = new UrlGuard(
@@ -79,16 +91,16 @@ class ImageDimensionsService implements ImageDimensionsContract
         $path = trim($path);
 
         if ($path === '') {
-            throw new InvalidImageException("Path must be a non-empty string");
+            throw new InvalidImageException('Path must be a non-empty string');
         }
 
         // Resolve real path to handle symlinks and relative paths
         $realPath = realpath($path);
-        if ($realPath === false || !is_file($realPath)) {
+        if ($realPath === false || ! is_file($realPath)) {
             throw FileNotFoundException::forLocal($path);
         }
 
-        if (!is_readable($realPath)) {
+        if (! is_readable($realPath)) {
             throw new InvalidImageException("File is not readable: {$path}");
         }
 
@@ -112,13 +124,13 @@ class ImageDimensionsService implements ImageDimensionsContract
     {
         $url = trim($url);
 
-        if (!filter_var($url, FILTER_VALIDATE_URL)) {
+        if (! filter_var($url, FILTER_VALIDATE_URL)) {
             throw new InvalidImageException("Invalid URL provided: {$url}");
         }
 
         $scheme = parse_url($url, PHP_URL_SCHEME);
-        if (!in_array($scheme, ['http', 'https'], true)) {
-            throw new InvalidImageException("Only HTTP and HTTPS URLs are supported");
+        if (! in_array($scheme, ['http', 'https'], true)) {
+            throw new InvalidImageException('Only HTTP and HTTPS URLs are supported');
         }
 
         // SSRF guard: reject private/reserved hosts (unless explicitly allowed).
@@ -145,11 +157,11 @@ class ImageDimensionsService implements ImageDimensionsContract
         $path = trim($path);
 
         if ($diskName === '') {
-            throw new InvalidImageException("Disk name must be a non-empty string");
+            throw new InvalidImageException('Disk name must be a non-empty string');
         }
 
         if ($path === '') {
-            throw new InvalidImageException("Path must be a non-empty string");
+            throw new InvalidImageException('Path must be a non-empty string');
         }
 
         try {
@@ -158,7 +170,7 @@ class ImageDimensionsService implements ImageDimensionsContract
             throw new InvalidImageException("Storage disk '{$diskName}' does not exist");
         }
 
-        if (!$disk->exists($path)) {
+        if (! $disk->exists($path)) {
             throw FileNotFoundException::forStorage($diskName, $path);
         }
 
@@ -209,18 +221,19 @@ class ImageDimensionsService implements ImageDimensionsContract
      * The result is not cached. The stream is read but not closed — the caller
      * owns it.
      *
-     * @param resource $stream
+     * @param  resource  $stream
+     *
      * @throws TemporaryFileException
      * @throws InvalidImageException
      */
     public function fromStream($stream): Dimensions
     {
-        if (!is_resource($stream)) {
+        if (! is_resource($stream)) {
             throw new InvalidImageException('A readable stream resource is required.');
         }
 
         $temp = new TemporaryFile($this->tempDir, 'imgdim_stream_');
-        while (!feof($stream)) {
+        while (! feof($stream)) {
             if ($temp->appendFromStream($stream, 1048576) === 0) {
                 break;
             }
@@ -281,7 +294,7 @@ class ImageDimensionsService implements ImageDimensionsContract
     /**
      * @see fromStream()
      *
-     * @param resource $stream
+     * @param  resource  $stream
      */
     public function tryFromStream($stream): ?Dimensions
     {
@@ -300,7 +313,7 @@ class ImageDimensionsService implements ImageDimensionsContract
      * Run a resolver, converting any package exception into a null result.
      * Non-package throwables (e.g. TypeError) are NOT swallowed.
      *
-     * @param callable(): Dimensions $resolver
+     * @param  callable(): Dimensions  $resolver
      */
     protected function attempt(callable $resolver): ?Dimensions
     {
@@ -315,6 +328,7 @@ class ImageDimensionsService implements ImageDimensionsContract
      * Get dimensions from a URL, reading only as much of the body as needed.
      *
      * @return array{width: int, height: int}
+     *
      * @throws UrlAccessException
      * @throws TemporaryFileException
      * @throws FileTooLargeException
@@ -349,7 +363,7 @@ class ImageDimensionsService implements ImageDimensionsContract
         $this->assertContentLengthWithinLimit($response->header('Content-Length'));
 
         $stream = $response->toPsrResponse()->getBody()->detach();
-        if (!is_resource($stream)) {
+        if (! is_resource($stream)) {
             throw UrlAccessException::couldNotOpen($url);
         }
 
@@ -358,17 +372,16 @@ class ImageDimensionsService implements ImageDimensionsContract
         try {
             return $this->resolveFromStream($stream, $temp, parse_url($url, PHP_URL_PATH) ?: null);
         } finally {
-            if (is_resource($stream)) {
-                @fclose($stream);
-            }
+            @fclose($stream);
         }
     }
 
     /**
      * Get dimensions from a storage disk stream, reading only as much as needed.
      *
-     * @param \Illuminate\Contracts\Filesystem\Filesystem $disk
+     * @param  Filesystem  $disk
      * @return array{width: int, height: int}
+     *
      * @throws StorageAccessException
      * @throws TemporaryFileException
      * @throws FileTooLargeException
@@ -382,7 +395,7 @@ class ImageDimensionsService implements ImageDimensionsContract
             throw StorageAccessException::couldNotReadStream($path);
         }
 
-        if (!is_resource($stream)) {
+        if (! is_resource($stream)) {
             throw StorageAccessException::couldNotReadStream($path);
         }
 
@@ -391,9 +404,7 @@ class ImageDimensionsService implements ImageDimensionsContract
         try {
             return $this->resolveFromStream($stream, $temp, $path);
         } finally {
-            if (is_resource($stream)) {
-                @fclose($stream);
-            }
+            @fclose($stream);
         }
     }
 
@@ -404,8 +415,9 @@ class ImageDimensionsService implements ImageDimensionsContract
      * dimensions, keeps reading the SAME stream (no second request, no full
      * in-memory buffering) up to the configured download limit.
      *
-     * @param resource $stream
+     * @param  resource  $stream
      * @return array{width: int, height: int}
+     *
      * @throws FileTooLargeException
      * @throws TemporaryFileException
      * @throws InvalidImageException
@@ -435,7 +447,7 @@ class ImageDimensionsService implements ImageDimensionsContract
                     throw FileTooLargeException::forDownload($limit);
                 }
             } else {
-                while (!feof($stream)) {
+                while (! feof($stream)) {
                     if ($temp->appendFromStream($stream, 1048576) === 0) {
                         break;
                     }
@@ -466,11 +478,12 @@ class ImageDimensionsService implements ImageDimensionsContract
     /**
      * Determine image dimensions for a file already on the local filesystem.
      *
-     * @param string $path Filesystem path to read.
-     * @param string|null $nameHint Original name/path used for extension-based
-     *        format detection and error messages. Needed because remote sources
-     *        are written to extension-less temp files.
+     * @param  string  $path  Filesystem path to read.
+     * @param  string|null  $nameHint  Original name/path used for extension-based
+     *                                 format detection and error messages. Needed because remote sources
+     *                                 are written to extension-less temp files.
      * @return array{width: int, height: int}
+     *
      * @throws InvalidImageException
      * @throws FileTooLargeException
      */
@@ -541,7 +554,7 @@ class ImageDimensionsService implements ImageDimensionsContract
      */
     protected function getCacheKey(string $type, string $identifier, ?int $modifiedTime = null): string
     {
-        $key = "image_dimensions:v2:{$type}:" . md5($identifier);
+        $key = "image_dimensions:v2:{$type}:".md5($identifier);
         if ($modifiedTime !== null) {
             $key .= ":{$modifiedTime}";
         }
@@ -556,12 +569,12 @@ class ImageDimensionsService implements ImageDimensionsContract
      * hold plain data (v1-compatible); the result is hydrated into a
      * {@see Dimensions} value object before returning.
      *
-     * @param callable(): array{width: int, height: int} $callback
+     * @param  Closure(): array{width: int, height: int}  $callback
      */
-    protected function getCachedOrCompute(string $key, callable $callback): Dimensions
+    protected function getCachedOrCompute(string $key, Closure $callback): Dimensions
     {
         // Caching off, or a non-positive finite TTL ("do not cache").
-        if (!$this->enableCache || ($this->cacheTtl !== null && $this->cacheTtl <= 0)) {
+        if (! $this->enableCache || ($this->cacheTtl !== null && $this->cacheTtl <= 0)) {
             return Dimensions::fromArray($callback());
         }
 

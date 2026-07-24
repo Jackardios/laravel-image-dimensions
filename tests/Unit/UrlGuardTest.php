@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Jackardios\ImageDimensions\Tests\Unit;
 
@@ -24,20 +26,20 @@ class UrlGuardTest extends TestCase
     public static function blockedIpProvider(): array
     {
         return [
-            'ipv4 loopback'        => ['127.0.0.1'],
-            'ipv4 private 10'      => ['10.0.0.5'],
-            'ipv4 private 172'     => ['172.16.0.1'],
-            'ipv4 private 192'     => ['192.168.1.1'],
+            'ipv4 loopback' => ['127.0.0.1'],
+            'ipv4 private 10' => ['10.0.0.5'],
+            'ipv4 private 172' => ['172.16.0.1'],
+            'ipv4 private 192' => ['192.168.1.1'],
             'ipv4 link-local/meta' => ['169.254.169.254'],
-            'ipv4 unspecified'     => ['0.0.0.0'],
-            'ipv4 cgnat'           => ['100.64.0.1'],
-            'ipv4 test-net'        => ['192.0.2.1'],
-            'ipv4 benchmark'       => ['198.18.0.1'],
-            'ipv6 loopback'        => ['::1'],
-            'ipv6 ula'             => ['fc00::1'],
-            'ipv6 link-local'      => ['fe80::1'],
+            'ipv4 unspecified' => ['0.0.0.0'],
+            'ipv4 cgnat' => ['100.64.0.1'],
+            'ipv4 test-net' => ['192.0.2.1'],
+            'ipv4 benchmark' => ['198.18.0.1'],
+            'ipv6 loopback' => ['::1'],
+            'ipv6 ula' => ['fc00::1'],
+            'ipv6 link-local' => ['fe80::1'],
             'ipv4-mapped loopback' => ['::ffff:127.0.0.1'],
-            'ipv4-mapped private'  => ['::ffff:10.0.0.1'],
+            'ipv4-mapped private' => ['::ffff:10.0.0.1'],
         ];
     }
 
@@ -57,7 +59,7 @@ class UrlGuardTest extends TestCase
         return [
             'ipv4 public a' => ['8.8.8.8'],
             'ipv4 public b' => ['1.1.1.1'],
-            'ipv6 public'   => ['2606:4700:4700::1111'],
+            'ipv6 public' => ['2606:4700:4700::1111'],
         ];
     }
 

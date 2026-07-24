@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Jackardios\ImageDimensions\Tests\Unit;
 
@@ -16,7 +18,7 @@ class SvgDimensionsExtractorTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->extractor = new SvgDimensionsExtractor();
+        $this->extractor = new SvgDimensionsExtractor;
     }
 
     #[Test]
@@ -79,7 +81,7 @@ class SvgDimensionsExtractorTest extends TestCase
     public function it_handles_an_internal_dtd_subset(): void
     {
         $svg = '<!DOCTYPE svg [<!ENTITY nbsp "&#160;">]>'
-            . '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect/></svg>';
+            .'<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect/></svg>';
 
         $d = $this->extractor->extract($svg);
         $this->assertEqualsDimensions(64, 64, $d);
@@ -99,13 +101,13 @@ class SvgDimensionsExtractorTest extends TestCase
     public static function cssUnitProvider(): array
     {
         return [
-            'inches'      => ['1in', '2in', 96, 192],
+            'inches' => ['1in', '2in', 96, 192],
             'centimeters' => ['1cm', '1cm', 38, 38],   // 37.795 -> ceil 38
             'millimeters' => ['10mm', '10mm', 38, 38], // 37.795 -> ceil 38
-            'points'      => ['72pt', '72pt', 96, 96],
-            'picas'       => ['1pc', '1pc', 16, 16],
-            'scientific'  => ['1e2', '1.5e1', 100, 15],
-            'decimal'     => ['99.2', '10.9', 100, 11], // ceil
+            'points' => ['72pt', '72pt', 96, 96],
+            'picas' => ['1pc', '1pc', 16, 16],
+            'scientific' => ['1e2', '1.5e1', 100, 15],
+            'decimal' => ['99.2', '10.9', 100, 11], // ceil
         ];
     }
 
@@ -166,7 +168,7 @@ class SvgDimensionsExtractorTest extends TestCase
     public function it_does_not_leak_a_type_error_on_a_huge_document_with_a_script_tag(): void
     {
         $content = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><script>'
-            . str_repeat('<g a="b"/>', 100000) . '</svg>';
+            .str_repeat('<g a="b"/>', 100000).'</svg>';
 
         try {
             $result = $this->extractor->extract($content);

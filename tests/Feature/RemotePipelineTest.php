@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Jackardios\ImageDimensions\Tests\Feature;
 
@@ -33,7 +35,7 @@ class RemotePipelineTest extends TestCase
      * network-free — real DNS resolution is skipped when private hosts are
      * allowed).
      *
-     * @param array<string, mixed> $overrides
+     * @param  array<string, mixed>  $overrides
      */
     private function makeService(array $overrides = []): ImageDimensionsService
     {
@@ -139,7 +141,7 @@ class RemotePipelineTest extends TestCase
 
     private function fakeInMemoryDisk(string $name): IlluminateFilesystemAdapter
     {
-        $adapter = new InMemoryFilesystemAdapter();
+        $adapter = new InMemoryFilesystemAdapter;
         $disk = new IlluminateFilesystemAdapter(new Flysystem($adapter), $adapter);
         Storage::set($name, $disk);
 

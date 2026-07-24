@@ -1,9 +1,12 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Jackardios\ImageDimensions\Tests\Feature;
 
 use Illuminate\Http\UploadedFile;
 use Jackardios\ImageDimensions\Dimensions;
+use Jackardios\ImageDimensions\Exceptions\InvalidImageException;
 use Jackardios\ImageDimensions\ImageDimensionsService;
 use Jackardios\ImageDimensions\Tests\Concerns\CreatesTestImages;
 use Jackardios\ImageDimensions\Tests\TestCase;
@@ -14,13 +17,14 @@ class NewApiMethodsTest extends TestCase
     use CreatesTestImages;
 
     private ImageDimensionsService $service;
+
     private string $dir;
 
     protected function setUp(): void
     {
         parent::setUp();
         $this->service = new ImageDimensionsService(['enable_cache' => false]);
-        $this->dir = sys_get_temp_dir() . '/imgdim_api_' . uniqid();
+        $this->dir = sys_get_temp_dir().'/imgdim_api_'.uniqid();
         mkdir($this->dir, 0777, true);
     }
 
@@ -59,7 +63,7 @@ class NewApiMethodsTest extends TestCase
     #[Test]
     public function from_contents_rejects_an_empty_string(): void
     {
-        $this->expectException(\Jackardios\ImageDimensions\Exceptions\InvalidImageException::class);
+        $this->expectException(InvalidImageException::class);
         $this->service->fromContents('');
     }
 
@@ -91,7 +95,7 @@ class NewApiMethodsTest extends TestCase
     public function it_reads_an_svg_upload_without_a_usable_extension(): void
     {
         // Simulate an upload temp file with no extension but SVG contents.
-        $path = $this->dir . '/phpUPLOAD';
+        $path = $this->dir.'/phpUPLOAD';
         file_put_contents($path, '<svg xmlns="http://www.w3.org/2000/svg" width="70" height="30"><rect/></svg>');
         $this->createdFiles[] = $path;
 
@@ -114,7 +118,7 @@ class NewApiMethodsTest extends TestCase
     #[Test]
     public function try_variants_return_null_on_failure(): void
     {
-        $this->assertNull($this->service->tryFromLocal($this->dir . '/missing.png'));
+        $this->assertNull($this->service->tryFromLocal($this->dir.'/missing.png'));
         $this->assertNull($this->service->tryFromContents('not an image'));
         $this->assertNull($this->service->tryFromStorage('nonexistent-disk', 'x.png'));
 

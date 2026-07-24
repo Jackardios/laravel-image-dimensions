@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Jackardios\ImageDimensions\Support;
 
@@ -41,9 +43,9 @@ final class SvgDimensionsExtractor
         libxml_clear_errors();
 
         try {
-            $doc = new DOMDocument();
+            $doc = new DOMDocument;
 
-            if (!$doc->loadXML($content, LIBXML_NONET)) {
+            if (! $doc->loadXML($content, LIBXML_NONET)) {
                 $errors = libxml_get_errors();
                 $reason = $errors !== [] ? trim($errors[0]->message) : 'invalid XML content';
                 throw new InvalidImageException("Could not parse SVG: {$reason}");
@@ -102,11 +104,13 @@ final class SvgDimensionsExtractor
 
             if (preg_match('/^<\?xml\b.*?\?>/is', $rest, $m)) {
                 $offset += strlen($m[0]);
+
                 continue;
             }
 
             if (preg_match('/^<!--.*?-->/s', $rest, $m)) {
                 $offset += strlen($m[0]);
+
                 continue;
             }
 
@@ -116,6 +120,7 @@ final class SvgDimensionsExtractor
                     return false; // truncated inside the sniff window
                 }
                 $offset += $consumed;
+
                 continue;
             }
 
@@ -159,11 +164,11 @@ final class SvgDimensionsExtractor
             return null;
         }
 
-        if (!preg_match('/^\+?(\d*\.?\d+(?:[eE][+-]?\d+)?)\s*(px|pt|pc|cm|mm|in)?$/i', $value, $m)) {
+        if (! preg_match('/^\+?(\d*\.?\d+(?:[eE][+-]?\d+)?)\s*(px|pt|pc|cm|mm|in)?$/i', $value, $m)) {
             return null;
         }
 
-        $unit = isset($m[2]) && $m[2] !== '' ? strtolower($m[2]) : 'px';
+        $unit = isset($m[2]) ? strtolower($m[2]) : 'px';
         $pixels = (float) $m[1] * self::UNIT_TO_PIXELS[$unit];
 
         return $pixels > 0 ? (int) ceil($pixels) : null;

@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Jackardios\ImageDimensions\Tests\Unit;
 
@@ -77,7 +79,7 @@ class TemporaryFileTest extends TestCase
             $this->markTestSkipped('Directory permission checks are ineffective when running as root.');
         }
 
-        $dir = sys_get_temp_dir() . '/imgdim_ro_' . uniqid();
+        $dir = sys_get_temp_dir().'/imgdim_ro_'.uniqid();
         mkdir($dir, 0555, true);
 
         try {

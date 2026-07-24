@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Jackardios\ImageDimensions\Support;
 
@@ -14,7 +16,7 @@ use Jackardios\ImageDimensions\Exceptions\TemporaryFileException;
  */
 final class TemporaryFile
 {
-    private string $path;
+    private string $path = '';
 
     /** @var resource|null */
     private $handle;
@@ -26,7 +28,7 @@ final class TemporaryFile
      */
     public function __construct(string $directory, string $prefix = 'imgdim_')
     {
-        if (!is_dir($directory) || !is_writable($directory)) {
+        if (! is_dir($directory) || ! is_writable($directory)) {
             throw TemporaryFileException::couldNotCreate();
         }
 
@@ -67,7 +69,8 @@ final class TemporaryFile
      * actually written during this call. Reads in 8KB chunks and stops at EOF,
      * once $maxBytes is reached, or after repeated empty reads.
      *
-     * @param resource $stream
+     * @param  resource  $stream
+     *
      * @throws TemporaryFileException
      */
     public function appendFromStream($stream, int $maxBytes): int
@@ -80,8 +83,8 @@ final class TemporaryFile
         $emptyReads = 0;
         $maxEmptyReads = 3;
 
-        while ($written < $maxBytes && !feof($stream) && $emptyReads < $maxEmptyReads) {
-            $chunkSize = min(8192, $maxBytes - $written);
+        while ($written < $maxBytes && ! feof($stream) && $emptyReads < $maxEmptyReads) {
+            $chunkSize = max(1, min(8192, $maxBytes - $written));
             $chunk = @fread($stream, $chunkSize);
 
             if ($chunk === false) {
@@ -91,6 +94,7 @@ final class TemporaryFile
             if ($chunk === '') {
                 $emptyReads++;
                 usleep(1000);
+
                 continue;
             }
 
@@ -151,7 +155,7 @@ final class TemporaryFile
             $this->handle = null;
         }
 
-        if (isset($this->path) && file_exists($this->path)) {
+        if ($this->path !== '' && file_exists($this->path)) {
             @unlink($this->path);
         }
     }

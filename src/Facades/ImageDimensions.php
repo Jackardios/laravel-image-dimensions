@@ -1,8 +1,11 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Jackardios\ImageDimensions\Facades;
 
 use Illuminate\Support\Facades\Facade;
+use Jackardios\ImageDimensions\ImageDimensionsService;
 
 /**
  * @method static \Jackardios\ImageDimensions\Dimensions fromLocal(string $path)
@@ -18,7 +21,7 @@ use Illuminate\Support\Facades\Facade;
  * @method static \Jackardios\ImageDimensions\Dimensions|null tryFromStream(resource $stream)
  * @method static \Jackardios\ImageDimensions\Dimensions|null tryFromUploadedFile(\SplFileInfo $file)
  *
- * @see \Jackardios\ImageDimensions\ImageDimensionsService
+ * @see ImageDimensionsService
  */
 class ImageDimensions extends Facade
 {

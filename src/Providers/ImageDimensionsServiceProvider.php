@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Jackardios\ImageDimensions\Providers;
 
@@ -12,12 +14,14 @@ class ImageDimensionsServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->mergeConfigFrom(
-            __DIR__ . '/../../config/image-dimensions.php',
+            __DIR__.'/../../config/image-dimensions.php',
             'image-dimensions'
         );
 
         $this->app->singleton(ImageDimensionsService::class, function (Application $app) {
-            return new ImageDimensionsService($app['config']->get('image-dimensions', []));
+            $config = $app->make('config')->get('image-dimensions', []);
+
+            return new ImageDimensionsService(is_array($config) ? $config : []);
         });
 
         // Resolve the same singleton whether the caller type-hints the concrete
@@ -30,7 +34,7 @@ class ImageDimensionsServiceProvider extends ServiceProvider
     {
         if ($this->app->runningInConsole()) {
             $this->publishes([
-                __DIR__ . '/../../config/image-dimensions.php' => config_path('image-dimensions.php'),
+                __DIR__.'/../../config/image-dimensions.php' => config_path('image-dimensions.php'),
             ], 'image-dimensions-config');
         }
     }

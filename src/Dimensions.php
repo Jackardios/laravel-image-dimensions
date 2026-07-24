@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Jackardios\ImageDimensions;
 
@@ -17,8 +19,9 @@ use Stringable;
  * working after the upgrade.
  *
  * @implements ArrayAccess<string, int>
+ * @implements Arrayable<string, int>
  */
-final readonly class Dimensions implements ArrayAccess, Arrayable, JsonSerializable, Stringable
+final readonly class Dimensions implements Arrayable, ArrayAccess, JsonSerializable, Stringable
 {
     public function __construct(
         public int $width,
@@ -34,7 +37,7 @@ final readonly class Dimensions implements ArrayAccess, Arrayable, JsonSerializa
     /**
      * Build a Dimensions instance from an associative array.
      *
-     * @param array{width: int|numeric-string, height: int|numeric-string} $data
+     * @param  array{width: int|numeric-string, height: int|numeric-string}  $data
      */
     public static function fromArray(array $data): self
     {
@@ -95,7 +98,7 @@ final readonly class Dimensions implements ArrayAccess, Arrayable, JsonSerializa
         return match ($offset) {
             'width' => $this->width,
             'height' => $this->height,
-            default => throw new InvalidArgumentException("Unknown dimension offset: " . var_export($offset, true)),
+            default => throw new InvalidArgumentException('Unknown dimension offset: '.var_export($offset, true)),
         };
     }
 

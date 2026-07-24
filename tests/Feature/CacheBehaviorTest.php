@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Jackardios\ImageDimensions\Tests\Feature;
 
@@ -6,20 +8,21 @@ use Illuminate\Support\Facades\Cache;
 use Jackardios\ImageDimensions\ImageDimensionsService;
 use Jackardios\ImageDimensions\Tests\Concerns\CreatesTestImages;
 use Jackardios\ImageDimensions\Tests\TestCase;
-use PHPUnit\Framework\Attributes\Test;
 use Mockery;
+use PHPUnit\Framework\Attributes\Test;
 
 class CacheBehaviorTest extends TestCase
 {
     use CreatesTestImages;
 
     private string $dir;
+
     private string $png;
 
     protected function setUp(): void
     {
         parent::setUp();
-        $this->dir = sys_get_temp_dir() . '/imgdim_cache_' . uniqid();
+        $this->dir = sys_get_temp_dir().'/imgdim_cache_'.uniqid();
         mkdir($this->dir, 0777, true);
         $this->png = $this->createImage($this->dir, 'pic.png', 40, 20);
     }
@@ -76,7 +79,7 @@ class CacheBehaviorTest extends TestCase
 
         $service->fromLocal($this->png);
 
-        $key = 'image_dimensions:v2:local:' . md5(realpath($this->png)) . ':' . filemtime($this->png);
+        $key = 'image_dimensions:v2:local:'.md5(realpath($this->png)).':'.filemtime($this->png);
         $this->assertTrue(Cache::has($key));
     }
 }

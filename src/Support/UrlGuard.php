@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Jackardios\ImageDimensions\Support;
 
@@ -43,7 +45,7 @@ final class UrlGuard
     private int $maxRedirects;
 
     /**
-     * @param array<int, string> $allowedHosts
+     * @param  array<int, string>  $allowedHosts
      */
     public function __construct(bool $allowPrivateHosts = false, array $allowedHosts = [], int $maxRedirects = 5)
     {
@@ -73,7 +75,7 @@ final class UrlGuard
         }
 
         $host = parse_url($url, PHP_URL_HOST);
-        if (!is_string($host) || $host === '') {
+        if (! is_string($host) || $host === '') {
             throw UrlNotAllowedException::invalidHost($url);
         }
 
@@ -99,8 +101,8 @@ final class UrlGuard
         $bareHost = trim($host, '[]'); // strip IPv6 literal brackets
 
         if ($this->allowedHosts !== []
-            && !in_array($host, $this->allowedHosts, true)
-            && !in_array($bareHost, $this->allowedHosts, true)
+            && ! in_array($host, $this->allowedHosts, true)
+            && ! in_array($bareHost, $this->allowedHosts, true)
         ) {
             throw UrlNotAllowedException::notInAllowlist($host);
         }
@@ -120,6 +122,7 @@ final class UrlGuard
      * Resolve a host to every IP a later request might connect to.
      *
      * @return list<string>
+     *
      * @throws UrlNotAllowedException
      */
     private function resolveIps(string $host): array

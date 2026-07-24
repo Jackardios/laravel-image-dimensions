@@ -5,5 +5,8 @@ Thumbs.db
 .phpunit.result.cache
 /.phpunit.cache/
 /vendor
+/build
 /tests/Unit/fixtures
 composer.lock
+phpstan.neon
+pint.json.bak

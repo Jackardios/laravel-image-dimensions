@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Jackardios\ImageDimensions\Tests\Concerns;
 
@@ -21,7 +23,7 @@ trait CreatesTestImages
         int $height,
         string $format = 'png'
     ): string {
-        $path = $directory . '/' . $filename;
+        $path = $directory.'/'.$filename;
         $image = imagecreatetruecolor($width, $height);
 
         $white = imagecolorallocate($image, 255, 255, 255);
@@ -56,7 +58,7 @@ trait CreatesTestImages
     /**
      * Create an SVG fixture. Attributes are rendered onto the root <svg> element.
      *
-     * @param array<string, string|int> $attributes
+     * @param  array<string, string|int>  $attributes
      */
     protected function createSvg(
         string $directory,
@@ -64,17 +66,17 @@ trait CreatesTestImages
         array $attributes,
         string $content = ''
     ): string {
-        $path = $directory . '/' . $filename;
+        $path = $directory.'/'.$filename;
 
         $attrs = '';
         foreach ($attributes as $key => $value) {
             $attrs .= " {$key}=\"{$value}\"";
         }
 
-        $svg = '<?xml version="1.0" encoding="UTF-8"?>' . "\n";
-        $svg .= '<svg xmlns="http://www.w3.org/2000/svg"' . $attrs . '>' . "\n";
+        $svg = '<?xml version="1.0" encoding="UTF-8"?>'."\n";
+        $svg .= '<svg xmlns="http://www.w3.org/2000/svg"'.$attrs.'>'."\n";
         $svg .= $content !== '' ? $content : '<rect width="100%" height="100%" fill="red"/>';
-        $svg .= "\n" . '</svg>';
+        $svg .= "\n".'</svg>';
 
         file_put_contents($path, $svg);
         $this->createdFiles[] = $path;
