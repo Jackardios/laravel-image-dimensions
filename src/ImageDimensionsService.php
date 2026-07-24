@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Jackardios\ImageDimensions\Contracts\ImageDimensions as ImageDimensionsContract;
 use Jackardios\ImageDimensions\Exceptions\FileNotFoundException;
+use Jackardios\ImageDimensions\Exceptions\ImageDimensionsException;
 use Jackardios\ImageDimensions\Exceptions\FileTooLargeException;
 use Jackardios\ImageDimensions\Exceptions\InvalidImageException;
 use Jackardios\ImageDimensions\Exceptions\StorageAccessException;
@@ -17,6 +18,7 @@ use Jackardios\ImageDimensions\Support\SvgDimensionsExtractor;
 use Jackardios\ImageDimensions\Support\TemporaryFile;
 use Jackardios\ImageDimensions\Support\UrlGuard;
 use League\Flysystem\Local\LocalFilesystemAdapter;
+use SplFileInfo;
 use Throwable;
 
 class ImageDimensionsService implements ImageDimensionsContract
@@ -179,6 +181,134 @@ class ImageDimensionsService implements ImageDimensionsContract
         return $this->getCachedOrCompute($cacheKey, function () use ($disk, $path) {
             return $this->getDimensionsFromStorage($disk, $path);
         });
+    }
+
+    /**
+     * Get image dimensions from raw binary image contents.
+     *
+     * The result is not cached (there is no stable identity to key on).
+     *
+     * @throws TemporaryFileException
+     * @throws InvalidImageException
+     */
+    public function fromContents(string $contents): Dimensions
+    {
+        if ($contents === '') {
+            throw new InvalidImageException('Contents must be a non-empty string.');
+        }
+
+        $temp = new TemporaryFile($this->tempDir, 'imgdim_contents_');
+        $temp->append($contents);
+
+        return Dimensions::fromArray($this->analyzeFile($temp->path()));
+    }
+
+    /**
+     * Get image dimensions from an open, readable stream resource.
+     *
+     * The result is not cached. The stream is read but not closed — the caller
+     * owns it.
+     *
+     * @param resource $stream
+     * @throws TemporaryFileException
+     * @throws InvalidImageException
+     */
+    public function fromStream($stream): Dimensions
+    {
+        if (!is_resource($stream)) {
+            throw new InvalidImageException('A readable stream resource is required.');
+        }
+
+        $temp = new TemporaryFile($this->tempDir, 'imgdim_stream_');
+        while (!feof($stream)) {
+            if ($temp->appendFromStream($stream, 1048576) === 0) {
+                break;
+            }
+        }
+
+        return Dimensions::fromArray($this->analyzeFile($temp->path()));
+    }
+
+    /**
+     * Get image dimensions from an uploaded file (Illuminate/Symfony UploadedFile
+     * or any SplFileInfo).
+     *
+     * @throws FileNotFoundException
+     * @throws InvalidImageException
+     */
+    public function fromUploadedFile(SplFileInfo $file): Dimensions
+    {
+        $path = $file->getRealPath();
+        if ($path === false || $path === '') {
+            $path = $file->getPathname();
+        }
+
+        return $this->fromLocal($path);
+    }
+
+    /**
+     * @see fromLocal()
+     */
+    public function tryFromLocal(string $path): ?Dimensions
+    {
+        return $this->attempt(fn () => $this->fromLocal($path));
+    }
+
+    /**
+     * @see fromUrl()
+     */
+    public function tryFromUrl(string $url): ?Dimensions
+    {
+        return $this->attempt(fn () => $this->fromUrl($url));
+    }
+
+    /**
+     * @see fromStorage()
+     */
+    public function tryFromStorage(string $diskName, string $path): ?Dimensions
+    {
+        return $this->attempt(fn () => $this->fromStorage($diskName, $path));
+    }
+
+    /**
+     * @see fromContents()
+     */
+    public function tryFromContents(string $contents): ?Dimensions
+    {
+        return $this->attempt(fn () => $this->fromContents($contents));
+    }
+
+    /**
+     * @see fromStream()
+     *
+     * @param resource $stream
+     */
+    public function tryFromStream($stream): ?Dimensions
+    {
+        return $this->attempt(fn () => $this->fromStream($stream));
+    }
+
+    /**
+     * @see fromUploadedFile()
+     */
+    public function tryFromUploadedFile(SplFileInfo $file): ?Dimensions
+    {
+        return $this->attempt(fn () => $this->fromUploadedFile($file));
+    }
+
+    /**
+     * Run a resolver, converting any package exception into a null result.
+     * Non-package throwables (e.g. TypeError) are NOT swallowed.
+     *
+     * @param callable(): Dimensions $resolver
+     */
+    protected function attempt(callable $resolver): ?Dimensions
+    {
+        try {
+            return $resolver();
+        } catch (ImageDimensionsException) {
+            return null;
+        }
     }
 
     /**

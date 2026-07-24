@@ -115,6 +115,26 @@ final class TemporaryFile
     }
 
     /**
+     * Append a raw string to the file.
+     *
+     * @throws TemporaryFileException
+     */
+    public function append(string $data): void
+    {
+        if ($this->handle === null) {
+            throw TemporaryFileException::couldNotWrite();
+        }
+
+        $bytes = @fwrite($this->handle, $data);
+        if ($bytes === false) {
+            throw TemporaryFileException::couldNotWrite();
+        }
+
+        $this->bytesWritten += $bytes;
+        $this->flush();
+    }
+
+    /**
      * Flush buffered writes so the file on disk reflects everything written.
      */
     public function flush(): void
