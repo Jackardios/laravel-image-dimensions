@@ -2,16 +2,17 @@
 
 namespace Jackardios\ImageDimensions;
 
-use DOMDocument;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Jackardios\ImageDimensions\Contracts\ImageDimensions as ImageDimensionsContract;
 use Jackardios\ImageDimensions\Exceptions\FileNotFoundException;
+use Jackardios\ImageDimensions\Exceptions\FileTooLargeException;
 use Jackardios\ImageDimensions\Exceptions\InvalidImageException;
 use Jackardios\ImageDimensions\Exceptions\StorageAccessException;
 use Jackardios\ImageDimensions\Exceptions\TemporaryFileException;
 use Jackardios\ImageDimensions\Exceptions\UrlAccessException;
+use Jackardios\ImageDimensions\Support\SvgDimensionsExtractor;
 use League\Flysystem\Local\LocalFilesystemAdapter;
 use Throwable;
 
@@ -24,6 +25,7 @@ class ImageDimensionsService implements ImageDimensionsContract
     protected int $svgMaxFileSize;
     /** @var array{timeout: int, connect_timeout: int, verify: bool} */
     protected array $httpOptions;
+    protected SvgDimensionsExtractor $svgExtractor;
 
     /**
      * @param array<string, mixed>|null $config Package config. When null, falls
@@ -44,6 +46,7 @@ class ImageDimensionsService implements ImageDimensionsContract
             'connect_timeout' => max(0, (int) ($config['http']['connect_timeout'] ?? 10)),
             'verify' => (bool) ($config['http']['verify_ssl'] ?? true),
         ];
+        $this->svgExtractor = new SvgDimensionsExtractor();
     }
 
     /**
@@ -62,7 +65,7 @@ class ImageDimensionsService implements ImageDimensionsContract
 
         // Resolve real path to handle symlinks and relative paths
         $realPath = realpath($path);
-        if ($realPath === false || !file_exists($realPath)) {
+        if ($realPath === false || !is_file($realPath)) {
             throw FileNotFoundException::forLocal($path);
         }
 
@@ -70,10 +73,11 @@ class ImageDimensionsService implements ImageDimensionsContract
             throw new InvalidImageException("File is not readable: {$path}");
         }
 
-        $cacheKey = $this->getCacheKey('local', $realPath, filemtime($realPath));
+        $modifiedTime = @filemtime($realPath);
+        $cacheKey = $this->getCacheKey('local', $realPath, $modifiedTime === false ? null : $modifiedTime);
 
         return $this->getCachedOrCompute($cacheKey, function () use ($realPath) {
-            return $this->getDimensionsFromPath($realPath);
+            return $this->analyzeFile($realPath, $realPath);
         });
     }
 
@@ -173,10 +177,12 @@ class ImageDimensionsService implements ImageDimensionsContract
                 throw UrlAccessException::couldNotOpen($url);
             }
 
+            $nameHint = parse_url($url, PHP_URL_PATH) ?: null;
+
             try {
                 // Try with partial content first
                 $this->readStreamToFile($stream, $tempFile, $this->remoteReadBytes);
-                return $this->getDimensionsFromPath($tempFile);
+                return $this->analyzeFile($tempFile, $nameHint);
             } catch (InvalidImageException) {
                 // If partial read failed, download full file
                 if (is_resource($stream)) {
@@ -193,7 +199,7 @@ class ImageDimensionsService implements ImageDimensionsContract
                     throw TemporaryFileException::couldNotWrite();
                 }
 
-                return $this->getDimensionsFromPath($tempFile);
+                return $this->analyzeFile($tempFile, $nameHint);
             } catch (Throwable $e) {
                 throw UrlAccessException::couldNotDownload($url, $e);
             }
@@ -230,7 +236,7 @@ class ImageDimensionsService implements ImageDimensionsContract
 
             try {
                 $this->readStreamToFile($stream, $tempFile, $this->remoteReadBytes);
-                return $this->getDimensionsFromPath($tempFile);
+                return $this->analyzeFile($tempFile, $path);
             } catch (InvalidImageException $e) {
                 // If partial read failed, read entire file
                 if (is_resource($stream)) {
@@ -246,7 +252,7 @@ class ImageDimensionsService implements ImageDimensionsContract
                     throw TemporaryFileException::couldNotWrite();
                 }
 
-                return $this->getDimensionsFromPath($tempFile);
+                return $this->analyzeFile($tempFile, $path);
             }
         } finally {
             if (is_resource($stream)) {
@@ -259,141 +265,73 @@ class ImageDimensionsService implements ImageDimensionsContract
     }
 
     /**
-     * Get image dimensions from a file path.
+     * Determine image dimensions for a file already on the local filesystem.
      *
-     * @param string $filePath
+     * @param string $path Filesystem path to read.
+     * @param string|null $nameHint Original name/path used for extension-based
+     *        format detection and error messages. Needed because remote sources
+     *        are written to extension-less temp files.
      * @return array{width: int, height: int}
      * @throws InvalidImageException
+     * @throws FileTooLargeException
      */
-    protected function getDimensionsFromPath(string $filePath): array
+    protected function analyzeFile(string $path, ?string $nameHint = null): array
     {
-        $fileSize = @filesize($filePath);
+        $label = $nameHint ?? $path;
+
+        $fileSize = @filesize($path);
         if ($fileSize === false || $fileSize === 0) {
-            throw InvalidImageException::forPath($filePath, "File is empty.");
+            throw InvalidImageException::forPath($label, 'File is empty.');
         }
 
-        $extension = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
-        $mimeType = mime_content_type($filePath) ?: '';
-
-        // Handle SVG separately
-        if ($extension === 'svg' || str_contains($mimeType, 'svg')) {
-            if ($fileSize > $this->svgMaxFileSize) {
-                throw new InvalidImageException("SVG file is too large (max " . $this->svgMaxFileSize . " bytes)");
+        if ($this->looksLikeSvg($path, $nameHint)) {
+            if ($this->svgMaxFileSize > 0 && $fileSize > $this->svgMaxFileSize) {
+                throw FileTooLargeException::forSvg($this->svgMaxFileSize);
             }
-            return $this->getSvgDimensions($filePath);
+
+            $content = @file_get_contents($path);
+            if ($content === false) {
+                throw InvalidImageException::forPath($label, 'Could not read SVG file.');
+            }
+
+            return $this->svgExtractor->extract($content)->toArray();
         }
 
-        $size = @getimagesize($filePath);
-        if ($size === false) {
-            throw InvalidImageException::forPath($filePath, "Could not determine image dimensions");
+        $size = @getimagesize($path);
+        if ($size === false || (int) $size[0] <= 0 || (int) $size[1] <= 0) {
+            throw InvalidImageException::forPath($label, 'Could not determine image dimensions');
         }
 
-        return [
-            'width' => (int) $size[0],
-            'height' => (int) $size[1]
-        ];
+        return ['width' => (int) $size[0], 'height' => (int) $size[1]];
     }
 
     /**
-     * Get SVG dimensions from file.
-     *
-     * @param string $filePath
-     * @return array{width: int, height: int}
-     * @throws InvalidImageException
+     * Decide whether a file should be treated as SVG, using (in order) the
+     * hinted extension, the detected MIME type, and a content sniff. The sniff
+     * covers remote SVGs stored in extension-less temp files with no reliable
+     * MIME type.
      */
-    protected function getSvgDimensions(string $filePath): array
+    protected function looksLikeSvg(string $path, ?string $nameHint): bool
     {
-        $content = file_get_contents($filePath);
-        if ($content === false) {
-            throw InvalidImageException::forPath($filePath);
+        $extension = strtolower(pathinfo($nameHint ?? $path, PATHINFO_EXTENSION));
+        if ($extension === 'svg') {
+            return true;
         }
 
-        $previousUseInternalErrors = libxml_use_internal_errors(true);
-        $previousEntityLoader = libxml_disable_entity_loader(true);
-
-        try {
-            $doc = new DOMDocument();
-            $content = $this->sanitizeSvgContent($content);
-
-            if (!$doc->loadXML($content, LIBXML_NONET | LIBXML_NOENT)) {
-                $errors = libxml_get_errors();
-                $errorMessage = !empty($errors) ? $errors[0]->message : "Invalid XML content";
-                throw InvalidImageException::forPath($filePath, $errorMessage);
-            }
-
-            $svg = $doc->documentElement;
-            if (!$svg || $svg->tagName !== 'svg') {
-                throw new InvalidImageException("Invalid SVG file: {$filePath}");
-            }
-
-            $width = $this->parseSvgDimension($svg->getAttribute('width'));
-            $height = $this->parseSvgDimension($svg->getAttribute('height'));
-
-            // Try viewBox if dimensions are not set or invalid
-            if (($width === null || $height === null) && $svg->hasAttribute('viewBox')) {
-                $viewBox = preg_split('/[\s,]+/', trim($svg->getAttribute('viewBox')));
-                if (count($viewBox) === 4) {
-                    $viewBoxWidth = abs((float) $viewBox[2] - (float) $viewBox[0]);
-                    $viewBoxHeight = abs((float) $viewBox[3] - (float) $viewBox[1]);
-
-                    $width = $width ?? (int) ceil($viewBoxWidth);
-                    $height = $height ?? (int) ceil($viewBoxHeight);
-                }
-            }
-
-            if ($width === null || $height === null || $width <= 0 || $height <= 0) {
-                throw new InvalidImageException("Could not determine SVG dimensions: {$filePath}");
-            }
-
-            return ['width' => $width, 'height' => $height];
-        } finally {
-            libxml_clear_errors();
-            libxml_use_internal_errors($previousUseInternalErrors);
-            libxml_disable_entity_loader($previousEntityLoader);
-        }
-    }
-
-    /**
-     * Sanitize SVG content to remove potentially dangerous elements
-     */
-    protected function sanitizeSvgContent(string $content): string
-    {
-        // Remove script tags
-        $content = preg_replace('/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/mi', '', $content);
-
-        // Remove on* event attributes
-        $content = preg_replace('/\s*on\w+\s*=\s*["\'][^"\']*["\']/i', '', $content);
-
-        // Remove external references in DOCTYPE
-        $content = preg_replace('/<!DOCTYPE[^>]*>/i', '', $content);
-
-        return $content;
-    }
-
-    /**
-     * Parse SVG dimension value.
-     *
-     * @param string $value
-     * @return int|null
-     */
-    protected function parseSvgDimension(string $value): ?int
-    {
-        $value = trim($value);
-
-        if ($value === '' || $value === 'auto') {
-            return null;
+        $mimeType = @mime_content_type($path) ?: '';
+        if (str_contains($mimeType, 'svg')) {
+            return true;
         }
 
-        if (str_ends_with($value, '%')) {
-            return null;
+        $handle = @fopen($path, 'rb');
+        if ($handle === false) {
+            return false;
         }
 
-        if (preg_match('/^(\d+(?:\.\d+)?)\s*(px)?$/i', $value, $matches)) {
-            $number = (float) $matches[1];
-            return (int) ceil($number);
-        }
+        $head = @fread($handle, 4096);
+        @fclose($handle);
 
-        return null;
+        return $head !== false && $head !== '' && SvgDimensionsExtractor::sniff($head);
     }
 
     /**

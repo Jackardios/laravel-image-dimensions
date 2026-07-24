@@ -383,4 +383,34 @@ class ImageDimensionsServiceTest extends TestCase
         $result = $this->service->fromLocal($this->fixturesPath . '/test.webp');
         $this->assertDimensions(200, 300, $result);
     }
+
+    #[Test]
+    public function it_throws_file_not_found_for_a_directory(): void
+    {
+        $this->expectException(FileNotFoundException::class);
+        $this->service->fromLocal($this->fixturesPath);
+    }
+
+    #[Test]
+    public function it_reads_viewbox_with_a_non_zero_origin_through_from_local(): void
+    {
+        $path = $this->fixturesPath . '/vb-origin.svg';
+        file_put_contents($path, '<svg xmlns="http://www.w3.org/2000/svg" viewBox="10 20 400 300"><rect/></svg>');
+        $this->createdFiles[] = $path;
+
+        $this->assertDimensions(400, 300, $this->service->fromLocal($path));
+    }
+
+    #[Test]
+    public function it_reads_a_namespace_prefixed_svg_through_from_local(): void
+    {
+        $path = $this->fixturesPath . '/ns.svg';
+        file_put_contents(
+            $path,
+            '<svg:svg xmlns:svg="http://www.w3.org/2000/svg" width="120" height="90"><svg:rect/></svg:svg>'
+        );
+        $this->createdFiles[] = $path;
+
+        $this->assertDimensions(120, 90, $this->service->fromLocal($path));
+    }
 }
