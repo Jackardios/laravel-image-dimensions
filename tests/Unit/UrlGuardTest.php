@@ -40,6 +40,16 @@ class UrlGuardTest extends TestCase
             'ipv6 link-local' => ['fe80::1'],
             'ipv4-mapped loopback' => ['::ffff:127.0.0.1'],
             'ipv4-mapped private' => ['::ffff:10.0.0.1'],
+            // Transition mechanisms tunnelling a private IPv4 inside IPv6.
+            '6to4 loopback' => ['2002:7f00:1::'],
+            '6to4 private 10' => ['2002:a00:1::'],
+            '6to4 private 192.168' => ['2002:c0a8:1::'],
+            '6to4 metadata' => ['2002:a9fe:a9fe::'],
+            'nat64 loopback' => ['64:ff9b::7f00:1'],
+            'nat64 private 10' => ['64:ff9b::a00:1'],
+            'ipv6 documentation' => ['2001:db8::1'],
+            'ipv6 discard' => ['100::1'],
+            'ipv6 teredo' => ['2001:0::1'],
         ];
     }
 
@@ -60,6 +70,11 @@ class UrlGuardTest extends TestCase
             'ipv4 public a' => ['8.8.8.8'],
             'ipv4 public b' => ['1.1.1.1'],
             'ipv6 public' => ['2606:4700:4700::1111'],
+            'ipv6 public google' => ['2a00:1450:4001:800::200e'],
+            // The transition-prefix checks must not over-block: these tunnel a
+            // PUBLIC IPv4 and stay reachable.
+            '6to4 public v4' => ['2002:d83a:d54b::'],
+            'nat64 public v4' => ['64:ff9b::d83a:d54b'],
         ];
     }
 

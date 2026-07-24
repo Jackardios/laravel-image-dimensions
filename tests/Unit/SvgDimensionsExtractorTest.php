@@ -143,6 +143,42 @@ class SvgDimensionsExtractorTest extends TestCase
         $this->extractor->extract('<svg viewBox="0 0 0 0"/>');
     }
 
+    /**
+     * Regression: `(float) '1e400'` is INF and `(int) ceil(INF)` is 0, which made
+     * the Dimensions constructor throw a raw InvalidArgumentException — a
+     * non-package exception that escaped the contract (and tryFrom*()).
+     */
+    #[Test]
+    #[DataProvider('outOfRangeLengthProvider')]
+    public function it_rejects_out_of_range_lengths_instead_of_overflowing(string $svg): void
+    {
+        $this->expectException(InvalidImageException::class);
+        $this->extractor->extract($svg);
+    }
+
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function outOfRangeLengthProvider(): array
+    {
+        return [
+            'infinite width' => ['<svg width="1e400" height="10"/>'],
+            'huge exponent width' => ['<svg width="1e30" height="10"/>'],
+            'huge integer width' => ['<svg width="99999999999999999999" height="10"/>'],
+            'huge viewBox width' => ['<svg viewBox="0 0 1e30 10"/>'],
+            'huge viewBox height' => ['<svg viewBox="0 0 10 1e30"/>'],
+            'huge unit conversion' => ['<svg width="1e29in" height="10"/>'],
+        ];
+    }
+
+    #[Test]
+    public function it_still_accepts_a_large_but_representable_dimension(): void
+    {
+        $d = $this->extractor->extract('<svg width="100000" height="80000"/>');
+
+        $this->assertEqualsDimensions(100000, 80000, $d);
+    }
+
     #[Test]
     public function it_throws_for_a_non_svg_root(): void
     {

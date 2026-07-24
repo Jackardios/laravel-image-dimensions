@@ -62,6 +62,11 @@ return [
     | indefinitely (not recommended for remote images). A value of 0 or less
     | disables caching for these lookups.
     |
+    | Note: local/storage cache keys include the file's modification time, so a
+    | changed file is looked up under a new key and the previous entry is left
+    | to expire on its own. With a null TTL nothing expires, so entries for
+    | frequently rewritten files accumulate — prefer a finite TTL there.
+    |
     */
     'cache_ttl' => env('IMAGE_DIMENSIONS_CACHE_TTL', 3600), // 1 hour
 

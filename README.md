@@ -174,7 +174,7 @@ try {
 `fromUrl()` (and redirect handling) validate the target before connecting:
 
 - Only `http` and `https` schemes are allowed.
-- By default, hosts that resolve to private, loopback, link-local, or reserved ranges — including the cloud metadata endpoint `169.254.169.254`, CGNAT (`100.64.0.0/10`), and the IETF test networks — are rejected for both IPv4 and IPv6 (and IPv4-mapped IPv6). Set `url.allow_private_hosts` to `true` to restore the old, unrestricted behaviour (not recommended).
+- By default, hosts that resolve to private, loopback, link-local, or reserved ranges — including the cloud metadata endpoint `169.254.169.254`, CGNAT (`100.64.0.0/10`), and the IETF test networks — are rejected for both IPv4 and IPv6. This covers IPv4-mapped IPv6 (`::ffff:`) as well as addresses that tunnel an IPv4 destination inside IPv6: 6to4 (`2002::/16`) and NAT64 (`64:ff9b::/96`). Set `url.allow_private_hosts` to `true` to restore the old, unrestricted behaviour (not recommended).
 - Every redirect hop is re-validated against the same rules, up to `url.max_redirects`.
 - Setting `url.allowed_hosts` switches to a strict allowlist: only the listed hostnames may be fetched.
 
@@ -191,7 +191,7 @@ The published `config/image-dimensions.php` exposes the following options (each 
 | Key | Env | Default | Description |
 | --- | --- | --- | --- |
 | `remote_read_bytes` | `IMAGE_DIMENSIONS_REMOTE_READ_BYTES` | `131072` (128KB) | Bytes read from a remote source before the first attempt to determine dimensions. Clamped to 8KB–1MB. |
-| `max_download_bytes` | `IMAGE_DIMENSIONS_MAX_DOWNLOAD_BYTES` | `33554432` (32MB) | Hard cap on how much of a remote source is read when the header alone is not enough. Exceeding it throws `FileTooLargeException`. `0` disables the limit (not recommended). |
+| `max_download_bytes` | `IMAGE_DIMENSIONS_MAX_DOWNLOAD_BYTES` | `33554432` (32MB) | Hard cap on how many bytes are read from any non-local source — URLs, storage streams, `fromContents()`, and `fromStream()`. Exceeding it throws `FileTooLargeException`. Never applied below `remote_read_bytes` (the header probe must fit). `0` disables the limit (not recommended). |
 | `temp_dir` | `IMAGE_DIMENSIONS_TEMP_DIR` | `sys_get_temp_dir()` | Directory for temporary files created while streaming remote images. Must exist and be writable. |
 | `enable_cache` | `IMAGE_DIMENSIONS_ENABLE_CACHE` | `true` | Whether to cache results. |
 | `cache_ttl` | `IMAGE_DIMENSIONS_CACHE_TTL` | `3600` | Cache lifetime in seconds. `null` caches forever; `0` or less disables caching for these lookups. |
@@ -203,7 +203,9 @@ The published `config/image-dimensions.php` exposes the following options (each 
 | `url.max_redirects` | `IMAGE_DIMENSIONS_URL_MAX_REDIRECTS` | `5` | Maximum redirects to follow; each hop is re-validated. |
 | `svg.max_file_size` | `IMAGE_DIMENSIONS_SVG_MAX_SIZE` | `10485760` (10MB) | Maximum SVG size before `FileTooLargeException` is thrown. |
 
-The cache key is derived from the source type, its identifier (path/URL), and — for local and storage files — the modification time, so the cache invalidates automatically when a file changes.
+The cache key is derived from the source type, its identifier (path/URL), and — for local and storage files — the modification time, so the cache invalidates automatically when a file changes. Because a changed file produces a new key, the superseded entry is left to expire on its own; with `cache_ttl` set to `null` nothing expires, so prefer a finite TTL for frequently rewritten files.
+
+`fromContents()`, `fromStream()`, and `fromUploadedFile()` are never cached — none of them has a stable identity to key on. (In particular, PHP recycles upload temp filenames, so caching them by path could return another request's dimensions.)
 
 ## Testing
 

@@ -6,6 +6,7 @@ namespace Jackardios\ImageDimensions\Tests\Feature;
 
 use Illuminate\Http\UploadedFile;
 use Jackardios\ImageDimensions\Dimensions;
+use Jackardios\ImageDimensions\Exceptions\FileTooLargeException;
 use Jackardios\ImageDimensions\Exceptions\InvalidImageException;
 use Jackardios\ImageDimensions\ImageDimensionsService;
 use Jackardios\ImageDimensions\Tests\Concerns\CreatesTestImages;
@@ -144,5 +145,108 @@ class NewApiMethodsTest extends TestCase
     public function the_new_methods_return_the_dimensions_value_object(): void
     {
         $this->assertInstanceOf(Dimensions::class, $this->service->fromContents($this->pngBytes(5, 5)));
+    }
+
+    /**
+     * Regression: a malformed SVG length such as `1e400` produced a raw
+     * InvalidArgumentException from the Dimensions constructor, which is not an
+     * ImageDimensionsException and therefore escaped tryFrom*() entirely.
+     */
+    #[Test]
+    public function try_variants_do_not_leak_a_non_package_exception_for_overflowing_svg(): void
+    {
+        $svg = '<svg xmlns="http://www.w3.org/2000/svg" width="1e400" height="10"><rect/></svg>';
+
+        $this->assertNull($this->service->tryFromContents($svg));
+    }
+
+    #[Test]
+    public function from_contents_reports_an_overflowing_svg_as_a_package_exception(): void
+    {
+        $this->expectException(InvalidImageException::class);
+        $this->service->fromContents('<svg xmlns="http://www.w3.org/2000/svg" width="1e400" height="10"/>');
+    }
+
+    // --- size caps on the non-remote sources ---
+
+    /**
+     * Regression: fromContents()/fromStream() never consulted max_download_bytes,
+     * so an attacker-controlled upload could fill the temp partition.
+     */
+    #[Test]
+    public function from_contents_honours_the_download_cap(): void
+    {
+        // The cap is never lower than remote_read_bytes (the header probe must
+        // fit), so pin both to make the effective limit explicit.
+        $service = new ImageDimensionsService([
+            'enable_cache' => false,
+            'remote_read_bytes' => 8192,
+            'max_download_bytes' => 8192,
+        ]);
+
+        $this->expectException(FileTooLargeException::class);
+        $service->fromContents(str_repeat('J', 20000));
+    }
+
+    #[Test]
+    public function from_stream_honours_the_download_cap(): void
+    {
+        $service = new ImageDimensionsService([
+            'enable_cache' => false,
+            'remote_read_bytes' => 8192,
+            'max_download_bytes' => 8192,
+        ]);
+
+        $stream = fopen('php://temp', 'r+b');
+        fwrite($stream, str_repeat('J', 200000));
+        rewind($stream);
+
+        try {
+            $this->expectException(FileTooLargeException::class);
+            $service->fromStream($stream);
+        } finally {
+            fclose($stream);
+        }
+    }
+
+    #[Test]
+    public function from_stream_still_reads_a_valid_image_within_the_cap(): void
+    {
+        $service = new ImageDimensionsService(['enable_cache' => false, 'max_download_bytes' => 1048576]);
+
+        $stream = fopen('php://temp', 'r+b');
+        fwrite($stream, $this->pngBytes(90, 45));
+        rewind($stream);
+
+        $this->assertDimensions(90, 45, $service->fromStream($stream));
+        fclose($stream);
+    }
+
+    /**
+     * Regression: fromUploadedFile() delegated to fromLocal(), whose cache key is
+     * md5(realpath)+filemtime. PHP recycles upload temp names and filemtime has
+     * one-second granularity, so two different uploads could collide and return
+     * the first upload's dimensions.
+     */
+    #[Test]
+    public function from_uploaded_file_does_not_serve_a_stale_cached_result(): void
+    {
+        $service = new ImageDimensionsService(['enable_cache' => true, 'cache_ttl' => 3600]);
+
+        // A recycled upload temp path: same name, same mtime, different content.
+        $path = $this->dir.'/phpRECYCLED';
+        $this->createdFiles[] = $path;
+
+        file_put_contents($path, $this->pngBytes(10, 10));
+        $mtime = filemtime($path);
+        $first = $service->fromUploadedFile(new UploadedFile($path, 'a.png', 'image/png', null, true));
+
+        file_put_contents($path, $this->pngBytes(200, 300));
+        touch($path, (int) $mtime);
+        clearstatcache(true, $path);
+        $second = $service->fromUploadedFile(new UploadedFile($path, 'b.png', 'image/png', null, true));
+
+        $this->assertDimensions(10, 10, $first);
+        $this->assertDimensions(200, 300, $second);
     }
 }

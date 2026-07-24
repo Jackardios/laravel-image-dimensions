@@ -37,12 +37,32 @@ final class UrlGuard
         ['203.0.113.0', 24],  // RFC 5737 TEST-NET-3
     ];
 
+    /**
+     * Reserved IPv6 prefixes not covered by the filter flags.
+     *
+     * @var list<array{0: string, 1: int}>
+     */
+    private const EXTRA_BLOCKED_V6 = [
+        ['2001:db8::', 32], // RFC 3849 documentation
+        ['100::', 64],      // RFC 6666 discard-only
+        ['2001::', 32],     // RFC 4380 Teredo
+    ];
+
     private bool $allowPrivateHosts;
 
     /** @var list<string> Lower-cased allowed hostnames; empty means "any". */
     private array $allowedHosts;
 
     private int $maxRedirects;
+
+    /**
+     * Per-instance memo of host => resolved IPs, so repeated lookups of the same
+     * host (cache hits, redirect chains, many images on one page) do not each
+     * pay two blocking DNS queries.
+     *
+     * @var array<string, list<string>>
+     */
+    private array $resolvedHosts = [];
 
     /**
      * @param  array<int, string>  $allowedHosts
@@ -131,6 +151,10 @@ final class UrlGuard
             return [$host];
         }
 
+        if (isset($this->resolvedHosts[$host])) {
+            return $this->resolvedHosts[$host];
+        }
+
         $ips = [];
 
         $v4 = @gethostbynamel($host);
@@ -149,10 +173,11 @@ final class UrlGuard
 
         if ($ips === []) {
             // Unresolvable: cannot prove the target is safe, so refuse it.
+            // Not memoized — a transient DNS failure should not stick.
             throw UrlNotAllowedException::unresolvableHost($host);
         }
 
-        return array_values(array_unique($ips));
+        return $this->resolvedHosts[$host] = array_values(array_unique($ips));
     }
 
     /**
@@ -168,8 +193,23 @@ final class UrlGuard
             }
         }
 
+        // Transition mechanisms that tunnel an IPv4 destination inside an IPv6
+        // address: 6to4 (2002:V4ADDR::/48) and NAT64 (64:ff9b::/96). On a host
+        // with such a route these reach the embedded IPv4, so judge that.
+        $embedded = $this->embeddedIpv4($ip);
+        if ($embedded !== null && $this->isBlockedIp($embedded)) {
+            return true;
+        }
+
         if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
             return true;
+        }
+
+        // Reserved IPv6 ranges the filter flags do not cover.
+        foreach (self::EXTRA_BLOCKED_V6 as $prefix) {
+            if ($this->ipv6InPrefix($ip, $prefix[0], $prefix[1])) {
+                return true;
+            }
         }
 
         // Extra IPv4 ranges the filter flags do not cover.
@@ -182,6 +222,61 @@ final class UrlGuard
         }
 
         return false;
+    }
+
+    /**
+     * Extract the IPv4 address tunnelled inside a 6to4 or NAT64 IPv6 address,
+     * or null when the address carries none.
+     */
+    private function embeddedIpv4(string $ip): ?string
+    {
+        $packed = @inet_pton($ip);
+        if ($packed === false || strlen($packed) !== 16) {
+            return null;
+        }
+
+        // 6to4: 2002:AABB:CCDD::/48 embeds A.B.C.D at bytes 2-5.
+        if (str_starts_with($packed, "\x20\x02")) {
+            return inet_ntop(substr($packed, 2, 4)) ?: null;
+        }
+
+        // NAT64 well-known prefix 64:ff9b::/96 embeds the IPv4 in the last 4 bytes.
+        if (str_starts_with($packed, "\x00\x64\xff\x9b".str_repeat("\x00", 8))) {
+            return inet_ntop(substr($packed, 12, 4)) ?: null;
+        }
+
+        return null;
+    }
+
+    /**
+     * Whether an IPv6 address falls inside a prefix, compared bitwise on the
+     * packed form.
+     */
+    private function ipv6InPrefix(string $ip, string $prefix, int $bits): bool
+    {
+        $packedIp = @inet_pton($ip);
+        $packedPrefix = @inet_pton($prefix);
+
+        if ($packedIp === false || $packedPrefix === false
+            || strlen($packedIp) !== 16 || strlen($packedPrefix) !== 16
+        ) {
+            return false;
+        }
+
+        $wholeBytes = intdiv($bits, 8);
+        $remainingBits = $bits % 8;
+
+        if ($wholeBytes > 0 && strncmp($packedIp, $packedPrefix, $wholeBytes) !== 0) {
+            return false;
+        }
+
+        if ($remainingBits === 0) {
+            return true;
+        }
+
+        $mask = 0xFF << (8 - $remainingBits) & 0xFF;
+
+        return (ord($packedIp[$wholeBytes]) & $mask) === (ord($packedPrefix[$wholeBytes]) & $mask);
     }
 
     private function ipv4InCidr(string $ip, string $subnet, int $bits): bool

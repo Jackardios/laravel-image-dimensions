@@ -137,6 +137,74 @@ class RemotePipelineTest extends TestCase
         $service->fromUrl($url);
     }
 
+    /**
+     * Regression: FileTooLargeException extends InvalidImageException, so the
+     * "header was insufficient, keep reading" catch block used to swallow the
+     * SVG size guard and download all the way to max_download_bytes. The SVG cap
+     * must abort immediately and report itself as the SVG cap.
+     */
+    #[Test]
+    public function it_aborts_immediately_when_the_svg_cap_is_exceeded(): void
+    {
+        $service = $this->makeService([
+            'remote_read_bytes' => 8192,
+            'max_download_bytes' => 16384,
+            'svg' => ['max_file_size' => 4096],
+        ]);
+
+        $url = 'https://example.com/big.svg';
+        $svg = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">'
+            .'<!--'.str_repeat('x', 200000).'--></svg>';
+        Http::fake([$url => Http::response(Utils::streamFor($svg), 200, ['Content-Type' => 'image/svg+xml'])]);
+
+        $this->expectException(FileTooLargeException::class);
+        $this->expectExceptionMessage('SVG file is too large (max 4096 bytes)');
+        $service->fromUrl($url);
+    }
+
+    /**
+     * Regression: a duplicated Content-Length header arrives joined as "N, N",
+     * which failed ctype_digit() and silently skipped the pre-download check.
+     */
+    #[Test]
+    public function it_honours_a_duplicated_or_padded_content_length_header(): void
+    {
+        foreach (['5242880, 5242880', ' 5242880'] as $headerValue) {
+            $service = $this->makeService(['max_download_bytes' => 1024]);
+
+            $url = 'https://example.com/huge-'.md5($headerValue).'.bin';
+            Http::fake([$url => Http::response('junk', 200, ['Content-Length' => $headerValue])]);
+
+            try {
+                $service->fromUrl($url);
+                $this->fail("Expected FileTooLargeException for Content-Length '{$headerValue}'");
+            } catch (FileTooLargeException $e) {
+                $this->assertStringContainsString('too large to download', $e->getMessage());
+            }
+        }
+    }
+
+    /**
+     * Regression: with no URL path the name hint was null and the error label
+     * fell back to the internal temp-file path, disclosing the server's temp
+     * directory layout in a user-visible message.
+     */
+    #[Test]
+    public function it_does_not_leak_the_temp_file_path_in_error_messages(): void
+    {
+        $url = 'https://example.com';
+        Http::fake([$url => Http::response('not an image at all', 200)]);
+
+        try {
+            $this->service->fromUrl($url);
+            $this->fail('Expected InvalidImageException');
+        } catch (InvalidImageException $e) {
+            $this->assertStringNotContainsString('imgdim_', $e->getMessage());
+            $this->assertStringNotContainsString(sys_get_temp_dir(), $e->getMessage());
+            $this->assertStringContainsString($url, $e->getMessage());
+        }
+    }
+
     // --- Storage pipeline (genuine non-local disk) ---
 
     private function fakeInMemoryDisk(string $name): IlluminateFilesystemAdapter

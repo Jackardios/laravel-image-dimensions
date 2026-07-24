@@ -64,6 +64,25 @@ migration steps.
 - Namespaced SVG roots (`<svg:svg>`) and documents with an internal DTD subset
   are parsed correctly; CSS absolute units (`px/pt/pc/cm/mm/in`) are supported.
 - Temporary files are always cleaned up (RAII), including on error paths.
+- Out-of-range SVG lengths (`1e400`, `1e30`, oversized integers) no longer
+  overflow the float→int cast into garbage dimensions, and no longer escape the
+  exception contract as a raw `InvalidArgumentException` — which previously
+  slipped past `tryFrom*()` too.
+- The `svg.max_file_size` guard now aborts immediately instead of being caught
+  by the "keep reading" retry handler, which used to download all the way to
+  `max_download_bytes` before failing with the wrong message.
+- `fromContents()` and `fromStream()` now honour `max_download_bytes`; they
+  previously buffered unbounded input to the temp partition.
+- `fromUploadedFile()` no longer caches by path+mtime. PHP recycles upload temp
+  names and `filemtime` is second-granular, so two uploads could collide and
+  return the first one's dimensions.
+- A duplicated or whitespace-padded `Content-Length` header (`"N, N"`) is parsed
+  correctly instead of silently skipping the pre-download size check.
+- Error messages no longer disclose the internal temp-file path when a source
+  has no usable name (e.g. a URL with no path, `fromContents()`).
+- Storage failures chain the driver's original exception as `previous`.
+- A short or zero-length `fwrite` (full disk, exceeded quota) raises
+  `TemporaryFileException` instead of silently truncating the temp file.
 
 ### Removed
 
@@ -77,5 +96,9 @@ migration steps.
   ranges by default (including the `169.254.169.254` metadata endpoint, CGNAT,
   and IETF test networks) and re-validates every redirect hop. DNS-rebinding
   remains a documented residual risk; use `url.allowed_hosts` for strict pinning.
+- The SSRF guard also rejects IPv6 addresses that tunnel a private or loopback
+  IPv4 destination — 6to4 (`2002::/16`) and NAT64 (`64:ff9b::/96`) — plus the
+  documentation (`2001:db8::/32`), discard (`100::/64`), and Teredo
+  (`2001::/32`) prefixes. Addresses tunnelling a *public* IPv4 stay reachable.
 - Remote downloads are bounded by `max_download_bytes`, mitigating memory/
   bandwidth exhaustion from oversized or non-image responses.

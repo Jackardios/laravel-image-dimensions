@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Jackardios\ImageDimensions\Support;
 
 use DOMDocument;
+use InvalidArgumentException;
 use Jackardios\ImageDimensions\Dimensions;
 use Jackardios\ImageDimensions\Exceptions\InvalidImageException;
 
@@ -23,6 +24,15 @@ final class SvgDimensionsExtractor
     /**
      * CSS absolute length units expressed as pixels, assuming 96 DPI.
      */
+    /**
+     * Largest accepted pixel dimension.
+     *
+     * Values above this (including INF from something like `1e400`) cannot be
+     * cast to int without wrapping to a garbage or negative number, so they are
+     * rejected rather than silently corrupted.
+     */
+    private const MAX_DIMENSION = 2147483647;
+
     private const UNIT_TO_PIXELS = [
         'px' => 1.0,
         'pt' => 96.0 / 72.0,   // ≈ 1.3333
@@ -69,7 +79,12 @@ final class SvgDimensionsExtractor
                 throw new InvalidImageException('Could not determine SVG dimensions.');
             }
 
-            return new Dimensions($width, $height);
+            try {
+                return new Dimensions($width, $height);
+            } catch (InvalidArgumentException $e) {
+                // Never let a non-package exception escape the contract.
+                throw new InvalidImageException("Invalid SVG dimensions: {$e->getMessage()}", 0, $e);
+            }
         } finally {
             libxml_clear_errors();
             libxml_use_internal_errors($previousUseInternalErrors);
@@ -171,7 +186,20 @@ final class SvgDimensionsExtractor
         $unit = isset($m[2]) ? strtolower($m[2]) : 'px';
         $pixels = (float) $m[1] * self::UNIT_TO_PIXELS[$unit];
 
-        return $pixels > 0 ? (int) ceil($pixels) : null;
+        return self::toPixels($pixels);
+    }
+
+    /**
+     * Convert a computed float length to a positive pixel count, rejecting
+     * non-finite and out-of-range values instead of letting the int cast wrap.
+     */
+    private static function toPixels(float $pixels): ?int
+    {
+        if (! is_finite($pixels) || $pixels <= 0 || $pixels > self::MAX_DIMENSION) {
+            return null;
+        }
+
+        return (int) ceil($pixels);
     }
 
     /**
@@ -189,12 +217,9 @@ final class SvgDimensionsExtractor
             return [null, null];
         }
 
-        $width = (float) $parts[2];
-        $height = (float) $parts[3];
-
         return [
-            $width > 0 ? (int) ceil($width) : null,
-            $height > 0 ? (int) ceil($height) : null,
+            self::toPixels((float) $parts[2]),
+            self::toPixels((float) $parts[3]),
         ];
     }
 }

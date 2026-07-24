@@ -66,8 +66,13 @@ final class TemporaryFile
 
     /**
      * Append up to $maxBytes bytes from a stream, returning the number of bytes
-     * actually written during this call. Reads in 8KB chunks and stops at EOF,
-     * once $maxBytes is reached, or after repeated empty reads.
+     * actually written during this call. Reads in 8KB chunks and stops at EOF or
+     * once $maxBytes is reached.
+     *
+     * A stream at end-of-data is detected by feof(), so an empty read only means
+     * "nothing available right now" — the non-blocking case. Those are retried
+     * with a short backoff (~250ms total) rather than truncating on the first
+     * stall; a stream that stays silent past that budget ends the read.
      *
      * @param  resource  $stream
      *
@@ -81,7 +86,7 @@ final class TemporaryFile
 
         $written = 0;
         $emptyReads = 0;
-        $maxEmptyReads = 3;
+        $maxEmptyReads = 50;
 
         while ($written < $maxBytes && ! feof($stream) && $emptyReads < $maxEmptyReads) {
             $chunkSize = max(1, min(8192, $maxBytes - $written));
@@ -93,7 +98,7 @@ final class TemporaryFile
 
             if ($chunk === '') {
                 $emptyReads++;
-                usleep(1000);
+                usleep(5000);
 
                 continue;
             }
@@ -101,16 +106,15 @@ final class TemporaryFile
             $emptyReads = 0;
 
             $bytes = @fwrite($this->handle, $chunk);
-            if ($bytes === false) {
+            // fwrite() returns 0 (not false) when the filesystem is full or a
+            // quota is hit; a short write means the same. Either way the file
+            // would be silently truncated, so fail loudly instead.
+            if ($bytes === false || $bytes < strlen($chunk)) {
                 throw TemporaryFileException::couldNotWrite();
             }
 
             $written += $bytes;
             $this->bytesWritten += $bytes;
-
-            if ($bytes < strlen($chunk)) {
-                break;
-            }
         }
 
         $this->flush();
@@ -130,7 +134,7 @@ final class TemporaryFile
         }
 
         $bytes = @fwrite($this->handle, $data);
-        if ($bytes === false) {
+        if ($bytes === false || $bytes < strlen($data)) {
             throw TemporaryFileException::couldNotWrite();
         }
 
