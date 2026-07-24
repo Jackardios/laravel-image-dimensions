@@ -324,7 +324,7 @@ class ImageDimensionsServiceTest extends TestCase
         config(['image-dimensions.enable_cache' => true]);
 
         $path = $this->fixturesPath . '/test.png';
-        $cacheKey = 'image_dimensions:local:' . md5(realpath($path)) . ':' . filemtime($path);
+        $cacheKey = 'image_dimensions:v2:local:' . md5(realpath($path)) . ':' . filemtime($path);
 
         Cache::shouldReceive('remember')
             ->once()

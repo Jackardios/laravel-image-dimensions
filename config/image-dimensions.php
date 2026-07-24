@@ -58,8 +58,9 @@ return [
     | Cache TTL (Time To Live)
     |--------------------------------------------------------------------------
     |
-    | The number of seconds to cache image dimensions. Set to 0 to cache
-    | indefinitely (not recommended for remote images).
+    | The number of seconds to cache image dimensions. Set to null to cache
+    | indefinitely (not recommended for remote images). A value of 0 or less
+    | disables caching for these lookups.
     |
     */
     'cache_ttl' => env('IMAGE_DIMENSIONS_CACHE_TTL', 3600), // 1 hour

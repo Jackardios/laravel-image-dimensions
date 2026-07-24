@@ -156,7 +156,7 @@ class ImageDimensionsIntegrationTest extends TestCase
     public function it_works_with_different_cache_drivers(): void
     {
         $path = $this->testFilesPath . '/test.png';
-        $cacheKey = 'image_dimensions:local:' . md5(realpath($path)) . ':' . filemtime($path);
+        $cacheKey = 'image_dimensions:v2:local:' . md5(realpath($path)) . ':' . filemtime($path);
 
         Config::set('cache.default', 'array');
         Cache::flush();

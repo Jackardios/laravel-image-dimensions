@@ -25,7 +25,7 @@ class ImageDimensionsService implements ImageDimensionsContract
     protected int $maxDownloadBytes;
     protected string $tempDir;
     protected bool $enableCache;
-    protected int $cacheTtl;
+    protected ?int $cacheTtl;
     protected int $svgMaxFileSize;
     /** @var array{timeout: int, connect_timeout: int, verify: bool} */
     protected array $httpOptions;
@@ -47,7 +47,9 @@ class ImageDimensionsService implements ImageDimensionsContract
         $this->maxDownloadBytes = $maxDownloadBytes <= 0 ? 0 : max($maxDownloadBytes, $this->remoteReadBytes);
         $this->tempDir = $config['temp_dir'] ?? sys_get_temp_dir();
         $this->enableCache = (bool) ($config['enable_cache'] ?? true);
-        $this->cacheTtl = max(0, (int) ($config['cache_ttl'] ?? 3600));
+        // null => cache forever; <= 0 => do not cache; otherwise, seconds.
+        $rawTtl = array_key_exists('cache_ttl', $config) ? $config['cache_ttl'] : 3600;
+        $this->cacheTtl = $rawTtl === null ? null : (int) $rawTtl;
         $this->svgMaxFileSize = max(0, (int) ($config['svg']['max_file_size'] ?? 10485760));
         $this->httpOptions = [
             'timeout' => max(0, (int) ($config['http']['timeout'] ?? 60)),
@@ -403,10 +405,13 @@ class ImageDimensionsService implements ImageDimensionsContract
 
     /**
      * Get cache key.
+     *
+     * The `v2` segment invalidates entries written by v1, which could hold
+     * incorrect dimensions from the old viewBox miscalculation.
      */
     protected function getCacheKey(string $type, string $identifier, ?int $modifiedTime = null): string
     {
-        $key = "image_dimensions:{$type}:" . md5($identifier);
+        $key = "image_dimensions:v2:{$type}:" . md5($identifier);
         if ($modifiedTime !== null) {
             $key .= ":{$modifiedTime}";
         }
@@ -425,8 +430,14 @@ class ImageDimensionsService implements ImageDimensionsContract
      */
     protected function getCachedOrCompute(string $key, callable $callback): Dimensions
     {
-        if (!$this->enableCache) {
+        // Caching off, or a non-positive finite TTL ("do not cache").
+        if (!$this->enableCache || ($this->cacheTtl !== null && $this->cacheTtl <= 0)) {
             return Dimensions::fromArray($callback());
+        }
+
+        // A null TTL means "cache indefinitely".
+        if ($this->cacheTtl === null) {
+            return Dimensions::fromArray(Cache::rememberForever($key, $callback));
         }
 
         return Dimensions::fromArray(Cache::remember($key, $this->cacheTtl, $callback));
