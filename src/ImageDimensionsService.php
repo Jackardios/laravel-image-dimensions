@@ -447,10 +447,10 @@ class ImageDimensionsService implements ImageDimensionsContract
                     throw FileTooLargeException::forDownload($limit);
                 }
             } else {
-                while (! feof($stream)) {
-                    if ($temp->appendFromStream($stream, 1048576) === 0) {
-                        break;
-                    }
+                // No cap: drain the stream in large chunks until it is
+                // exhausted (appendFromStream returns 0 once there is no more).
+                while ($temp->appendFromStream($stream, 1048576) > 0) {
+                    // keep reading
                 }
             }
 
