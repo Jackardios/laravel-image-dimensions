@@ -6,13 +6,13 @@ use Throwable;
 
 class UrlAccessException extends ImageDimensionsException
 {
-    public static function couldNotOpen(string $url, ?Throwable $previous = null): self
+    public static function couldNotOpen(string $url, ?Throwable $previous = null, ?int $statusCode = null): self
     {
-        return new self("Could not open URL: {$url}", 0, $previous);
-    }
+        $message = "Could not open URL: {$url}";
+        if ($statusCode !== null) {
+            $message .= " (HTTP {$statusCode})";
+        }
 
-    public static function couldNotDownload(string $url, ?Throwable $previous = null): self
-    {
-        return new self("Could not download full content from URL: {$url}", 0, $previous);
+        return new self($message, 0, $previous);
     }
 }

@@ -13,12 +13,14 @@ use Jackardios\ImageDimensions\Exceptions\StorageAccessException;
 use Jackardios\ImageDimensions\Exceptions\TemporaryFileException;
 use Jackardios\ImageDimensions\Exceptions\UrlAccessException;
 use Jackardios\ImageDimensions\Support\SvgDimensionsExtractor;
+use Jackardios\ImageDimensions\Support\TemporaryFile;
 use League\Flysystem\Local\LocalFilesystemAdapter;
 use Throwable;
 
 class ImageDimensionsService implements ImageDimensionsContract
 {
     protected int $remoteReadBytes;
+    protected int $maxDownloadBytes;
     protected string $tempDir;
     protected bool $enableCache;
     protected int $cacheTtl;
@@ -37,6 +39,9 @@ class ImageDimensionsService implements ImageDimensionsContract
         $config ??= config('image-dimensions', []);
 
         $this->remoteReadBytes = max(8192, min(1048576, (int) ($config['remote_read_bytes'] ?? 131072))); // 8KB-1MB
+        $maxDownloadBytes = (int) ($config['max_download_bytes'] ?? 33554432);
+        // 0 means unlimited; otherwise never below the initial read size.
+        $this->maxDownloadBytes = $maxDownloadBytes <= 0 ? 0 : max($maxDownloadBytes, $this->remoteReadBytes);
         $this->tempDir = $config['temp_dir'] ?? sys_get_temp_dir();
         $this->enableCache = (bool) ($config['enable_cache'] ?? true);
         $this->cacheTtl = max(0, (int) ($config['cache_ttl'] ?? 3600));
@@ -139,12 +144,21 @@ class ImageDimensionsService implements ImageDimensionsContract
             throw FileNotFoundException::forStorage($diskName, $path);
         }
 
-        $adapter = $disk->getAdapter();
-        if ($adapter instanceof LocalFilesystemAdapter) {
+        // Fast path: a local disk is just a filesystem path, so reuse fromLocal
+        // (which also enables its extension-aware format detection and caching).
+        if (method_exists($disk, 'getAdapter') && $disk->getAdapter() instanceof LocalFilesystemAdapter) {
             return $this->fromLocal($disk->path($path));
         }
 
-        $cacheKey = $this->getCacheKey('storage', "{$diskName}:{$path}", $disk->lastModified($path));
+        // The modification time invalidates the cache when the file changes;
+        // some drivers cannot report it, in which case the key omits it.
+        try {
+            $modifiedTime = $disk->lastModified($path);
+        } catch (Throwable) {
+            $modifiedTime = null;
+        }
+
+        $cacheKey = $this->getCacheKey('storage', "{$diskName}:{$path}", $modifiedTime);
 
         return $this->getCachedOrCompute($cacheKey, function () use ($disk, $path) {
             return $this->getDimensionsFromStorage($disk, $path);
@@ -152,115 +166,144 @@ class ImageDimensionsService implements ImageDimensionsContract
     }
 
     /**
-     * Get dimensions from URL with optimized downloading
-     * @throws TemporaryFileException
+     * Get dimensions from a URL, reading only as much of the body as needed.
+     *
+     * @return array{width: int, height: int}
      * @throws UrlAccessException
+     * @throws TemporaryFileException
+     * @throws FileTooLargeException
+     * @throws InvalidImageException
      */
     protected function getDimensionsFromUrl(string $url): array
     {
-        $tempFile = $this->createTempFile('url');
-        $stream = null;
-
         try {
-            // First attempt with partial read
             $response = Http::withOptions([
                 ...$this->httpOptions,
                 'stream' => true,
             ])->get($url);
-
-            if ($response->failed()) {
-                throw UrlAccessException::couldNotOpen($url);
-            }
-
-            $stream = $response->toPsrResponse()->getBody()->detach();
-            if (!is_resource($stream)) {
-                throw UrlAccessException::couldNotOpen($url);
-            }
-
-            $nameHint = parse_url($url, PHP_URL_PATH) ?: null;
-
-            try {
-                // Try with partial content first
-                $this->readStreamToFile($stream, $tempFile, $this->remoteReadBytes);
-                return $this->analyzeFile($tempFile, $nameHint);
-            } catch (InvalidImageException) {
-                // If partial read failed, download full file
-                if (is_resource($stream)) {
-                    fclose($stream);
-                }
-
-                $fullResponse = Http::withOptions($this->httpOptions)->get($url);
-                if ($fullResponse->failed()) {
-                    throw UrlAccessException::couldNotDownload($url);
-                }
-
-                $content = $fullResponse->body();
-                if (file_put_contents($tempFile, $content) === false) {
-                    throw TemporaryFileException::couldNotWrite();
-                }
-
-                return $this->analyzeFile($tempFile, $nameHint);
-            } catch (Throwable $e) {
-                throw UrlAccessException::couldNotDownload($url, $e);
-            }
-        } catch (UrlAccessException $e) {
-            throw $e;
         } catch (Throwable $e) {
+            // Connection failures, redirect loops, DNS errors, etc.
             throw UrlAccessException::couldNotOpen($url, $e);
+        }
+
+        if ($response->failed()) {
+            throw UrlAccessException::couldNotOpen($url, null, $response->status());
+        }
+
+        $this->assertContentLengthWithinLimit($response->header('Content-Length'));
+
+        $stream = $response->toPsrResponse()->getBody()->detach();
+        if (!is_resource($stream)) {
+            throw UrlAccessException::couldNotOpen($url);
+        }
+
+        $temp = new TemporaryFile($this->tempDir, 'imgdim_url_');
+
+        try {
+            return $this->resolveFromStream($stream, $temp, parse_url($url, PHP_URL_PATH) ?: null);
         } finally {
             if (is_resource($stream)) {
                 @fclose($stream);
-            }
-            if (file_exists($tempFile)) {
-                @unlink($tempFile);
             }
         }
     }
 
     /**
-     * Get dimensions from storage with streaming support
+     * Get dimensions from a storage disk stream, reading only as much as needed.
+     *
+     * @param \Illuminate\Contracts\Filesystem\Filesystem $disk
+     * @return array{width: int, height: int}
      * @throws StorageAccessException
      * @throws TemporaryFileException
+     * @throws FileTooLargeException
      * @throws InvalidImageException
      */
     protected function getDimensionsFromStorage($disk, string $path): array
     {
-        $tempFile = $this->createTempFile('storage');
-        $stream = null;
-
         try {
             $stream = $disk->readStream($path);
-            if (!is_resource($stream)) {
-                throw StorageAccessException::couldNotReadStream($path);
-            }
+        } catch (Throwable $e) {
+            throw StorageAccessException::couldNotReadStream($path);
+        }
 
-            try {
-                $this->readStreamToFile($stream, $tempFile, $this->remoteReadBytes);
-                return $this->analyzeFile($tempFile, $path);
-            } catch (InvalidImageException $e) {
-                // If partial read failed, read entire file
-                if (is_resource($stream)) {
-                    fclose($stream);
-                }
+        if (!is_resource($stream)) {
+            throw StorageAccessException::couldNotReadStream($path);
+        }
 
-                $fullContent = $disk->get($path);
-                if ($fullContent === null) {
-                    throw StorageAccessException::couldNotReadFullContent($path);
-                }
+        $temp = new TemporaryFile($this->tempDir, 'imgdim_storage_');
 
-                if (file_put_contents($tempFile, $fullContent) === false) {
-                    throw TemporaryFileException::couldNotWrite();
-                }
-
-                return $this->analyzeFile($tempFile, $path);
-            }
+        try {
+            return $this->resolveFromStream($stream, $temp, $path);
         } finally {
             if (is_resource($stream)) {
                 @fclose($stream);
             }
-            if (file_exists($tempFile)) {
-                @unlink($tempFile);
+        }
+    }
+
+    /**
+     * Resolve dimensions from an open stream.
+     *
+     * Reads a header-sized chunk first; if that is not enough to determine the
+     * dimensions, keeps reading the SAME stream (no second request, no full
+     * in-memory buffering) up to the configured download limit.
+     *
+     * @param resource $stream
+     * @return array{width: int, height: int}
+     * @throws FileTooLargeException
+     * @throws TemporaryFileException
+     * @throws InvalidImageException
+     */
+    protected function resolveFromStream($stream, TemporaryFile $temp, ?string $nameHint): array
+    {
+        $temp->appendFromStream($stream, $this->remoteReadBytes);
+
+        try {
+            return $this->analyzeFile($temp->path(), $nameHint);
+        } catch (InvalidImageException $e) {
+            // The header alone was insufficient. If more data is available,
+            // continue filling the same temp file and retry once.
+            if (feof($stream)) {
+                throw $e;
             }
+
+            $limit = $this->maxDownloadBytes;
+
+            if ($limit > 0) {
+                // Read up to the cap, plus one byte to detect an overflow.
+                $remaining = $limit + 1 - $temp->bytesWritten();
+                if ($remaining > 0) {
+                    $temp->appendFromStream($stream, $remaining);
+                }
+                if ($temp->bytesWritten() > $limit) {
+                    throw FileTooLargeException::forDownload($limit);
+                }
+            } else {
+                while (!feof($stream)) {
+                    if ($temp->appendFromStream($stream, 1048576) === 0) {
+                        break;
+                    }
+                }
+            }
+
+            return $this->analyzeFile($temp->path(), $nameHint);
+        }
+    }
+
+    /**
+     * Reject a response whose declared Content-Length exceeds the download cap
+     * before any body is read.
+     *
+     * @throws FileTooLargeException
+     */
+    protected function assertContentLengthWithinLimit(string $contentLength): void
+    {
+        if ($this->maxDownloadBytes <= 0 || $contentLength === '') {
+            return;
+        }
+
+        if (ctype_digit($contentLength) && (int) $contentLength > $this->maxDownloadBytes) {
+            throw FileTooLargeException::forDownload($this->maxDownloadBytes);
         }
     }
 
@@ -335,94 +378,7 @@ class ImageDimensionsService implements ImageDimensionsContract
     }
 
     /**
-     * Read stream to file.
-     *
-     * @param resource $stream
-     * @param string $filePath
-     * @param int $maxBytes
-     * @throws TemporaryFileException
-     */
-    protected function readStreamToFile($stream, string $filePath, int $maxBytes): void
-    {
-        $handle = @fopen($filePath, 'wb');
-        if ($handle === false) {
-            throw TemporaryFileException::couldNotWrite();
-        }
-
-        try {
-            $bytesRead = 0;
-            $emptyReads = 0;
-            $maxEmptyReads = 3;
-
-            while (!feof($stream) && $bytesRead < $maxBytes && $emptyReads < $maxEmptyReads) {
-                $remaining = $maxBytes - $bytesRead;
-                $chunkSize = min(8192, $remaining);
-
-                $chunk = @fread($stream, $chunkSize);
-                if ($chunk === false) {
-                    break;
-                }
-
-                if ($chunk === '') {
-                    $emptyReads++;
-                    usleep(1000);
-                    continue;
-                }
-
-                $emptyReads = 0;
-
-                $written = @fwrite($handle, $chunk);
-                if ($written === false) {
-                    throw TemporaryFileException::couldNotWrite();
-                }
-
-                $bytesRead += $written;
-
-                if ($written < strlen($chunk)) {
-                    break;
-                }
-            }
-
-            if ($bytesRead === 0) {
-                throw TemporaryFileException::couldNotWrite();
-            }
-        } finally {
-            @fclose($handle);
-        }
-    }
-
-    /**
-     * Create temporary file.
-     *
-     * @param string $prefix
-     * @return string
-     * @throws TemporaryFileException
-     */
-    protected function createTempFile(string $prefix): string
-    {
-        if (!is_dir($this->tempDir) || !is_writable($this->tempDir)) {
-            throw TemporaryFileException::couldNotCreate();
-        }
-
-        $maxAttempts = 3;
-        for ($i = 0; $i < $maxAttempts; $i++) {
-            $tempFile = @tempnam($this->tempDir, "imgdim_{$prefix}_");
-            if ($tempFile !== false) {
-                return $tempFile;
-            }
-            usleep(10000); // 10ms
-        }
-
-        throw TemporaryFileException::couldNotCreate();
-    }
-
-    /**
      * Get cache key.
-     *
-     * @param string $type
-     * @param string $identifier
-     * @param int|null $modifiedTime
-     * @return string
      */
     protected function getCacheKey(string $type, string $identifier, ?int $modifiedTime = null): string
     {

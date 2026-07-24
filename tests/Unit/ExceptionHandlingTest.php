@@ -185,13 +185,14 @@ class ExceptionHandlingTest extends TestCase
     }
 
     #[Test]
-    public function it_throws_if_storage_full_content_cannot_be_read_after_partial_failure(): void
+    public function it_throws_invalid_image_when_a_storage_stream_is_not_an_image(): void
     {
-
+        // A fully-readable but non-image stream that reaches EOF should surface
+        // an InvalidImageException (the stream is drained in place; there is no
+        // second "read full content" round-trip).
         $diskName = 's3_mock';
         $path = 'image.png';
 
-        // A stream with invalid data to cause an InvalidImageException
         $stream = fopen('php://memory', 'r+');
         fwrite($stream, 'invalid stream data');
         rewind($stream);
@@ -201,10 +202,8 @@ class ExceptionHandlingTest extends TestCase
         Storage::shouldReceive('getAdapter')->andReturn(new \stdClass());
         Storage::shouldReceive('lastModified')->with($path)->andReturn(time());
         Storage::shouldReceive('readStream')->with($path)->andReturn($stream);
-        Storage::shouldReceive('get')->with($path)->andReturn(null);
 
-        $this->expectException(StorageAccessException::class);
-        $this->expectExceptionMessage("Could not read full content from storage file: {$path}");
+        $this->expectException(InvalidImageException::class);
         $this->service->fromStorage($diskName, $path);
     }
 
@@ -213,6 +212,9 @@ class ExceptionHandlingTest extends TestCase
     #[Test]
     public function it_throws_if_temp_dir_is_not_writable_when_processing_url(): void
     {
+        $url = 'https://example.com/image.png';
+        Http::fake([$url => Http::response('image data', 200)]);
+
         $invalidDir = $this->testFilesPath . '/unwritable';
         mkdir($invalidDir, 0444, true); // Read-only
 
@@ -223,7 +225,7 @@ class ExceptionHandlingTest extends TestCase
         $this->expectExceptionMessage('Could not create temporary file');
 
         try {
-            $serviceWithBadConfig->fromUrl('https://example.com/image.png');
+            $serviceWithBadConfig->fromUrl($url);
         } finally {
             chmod($invalidDir, 0777);
             rmdir($invalidDir);

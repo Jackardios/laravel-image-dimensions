@@ -17,6 +17,21 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Maximum Download Bytes
+    |--------------------------------------------------------------------------
+    |
+    | The maximum number of bytes to read from a remote source (URL or cloud
+    | storage) when the initial partial read is not enough to determine the
+    | image dimensions. This bounds memory/bandwidth usage for non-image or
+    | truncated responses. Sources larger than this raise a
+    | FileTooLargeException. Set to 0 to disable the limit (not recommended).
+    | Default: 33554432 (32MB)
+    |
+    */
+    'max_download_bytes' => env('IMAGE_DIMENSIONS_MAX_DOWNLOAD_BYTES', 33554432),
+
+    /*
+    |--------------------------------------------------------------------------
     | Temporary Directory
     |--------------------------------------------------------------------------
     |
