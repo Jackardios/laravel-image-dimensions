@@ -86,7 +86,11 @@ migration steps.
 
 ### Removed
 
-- **BREAKING:** dropped Laravel 10 support (PHP floor raised to 8.2).
+- **BREAKING:** dropped Laravel 10 support (PHP floor raised to 8.2) and
+  Laravel 11 support. Every 11.x release, including the final v11.55.0, carries
+  unpatched security advisories, so a current Composer will not install it under
+  the default advisory policy. Supported range is now Laravel 12.x–13.x; the PHP
+  floor stays at 8.2 (Laravel 12's own minimum).
 - Regex-based SVG "sanitisation" — it offered no real protection (this package
   does not render SVGs) and broke valid documents.
 

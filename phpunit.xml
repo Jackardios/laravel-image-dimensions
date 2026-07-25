@@ -21,7 +21,11 @@
             <directory>./tests</directory>
         </testsuite>
     </testsuites>
-    <source>
+    <!-- ignoreIndirectDeprecations: keep failOnDeprecation strict for this
+         package's own code, but do not fail the build on deprecations raised
+         inside dependencies (e.g. testbench's config using PDO::MYSQL_ATTR_*,
+         deprecated in PHP 8.5). Those are not ours to fix. -->
+    <source ignoreIndirectDeprecations="true">
         <include>
             <directory>./src</directory>
         </include>

@@ -18,7 +18,7 @@ A robust and efficient Laravel package to get the dimensions (width and height) 
 ## Requirements
 
 - PHP 8.2+
-- Laravel 11.x, 12.x, or 13.x
+- Laravel 12.x or 13.x
 
 > Upgrading from v1? See [UPGRADE.md](UPGRADE.md). v1.x supports Laravel 10/11/12 and PHP 8.1+.
 

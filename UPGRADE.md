@@ -9,9 +9,13 @@ code that only *reads* the result keeps working, but review the items below.
 ### Platform requirements
 
 - **PHP 8.2+** (was 8.1+).
-- **Laravel 11.x, 12.x, or 13.x.** **Laravel 10 support is dropped** — its PHP
-  floor would pull the whole package back to 8.1. Applications on Laravel 10
-  should stay on `v1.x` or upgrade the framework first.
+- **Laravel 12.x or 13.x.** **Laravel 10 and 11 support is dropped.** Laravel 10
+  would pull the package's PHP floor back to 8.1. Laravel 11 is past its
+  security-support window: every 11.x release, up to and including the final
+  v11.55.0, carries unpatched security advisories, so a current Composer refuses
+  to install it unless the advisory policy is switched off. Advertising support
+  for a version users cannot install cleanly would be misleading. Applications
+  on Laravel 10 or 11 should stay on `v1.x` or upgrade the framework first.
 - `guzzlehttp/guzzle: ^7.8` is now a hard requirement (it is no longer pulled in
   transitively by `illuminate/http`).
 
