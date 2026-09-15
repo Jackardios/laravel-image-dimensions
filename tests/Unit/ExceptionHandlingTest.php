@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Jackardios\ImageDimensions\Tests\Unit;
 
 use Illuminate\Http\Client\ConnectionException;
@@ -14,31 +16,33 @@ use Jackardios\ImageDimensions\Exceptions\UrlAccessException;
 use Jackardios\ImageDimensions\ImageDimensionsService;
 use Jackardios\ImageDimensions\Tests\TestCase;
 use Mockery;
+use PHPUnit\Framework\Attributes\Test;
 
 class ExceptionHandlingTest extends TestCase
 {
     protected ImageDimensionsService $service;
+
     protected string $testFilesPath;
 
     protected function setUp(): void
     {
         parent::setUp();
-        $this->service = new ImageDimensionsService();
-        $this->testFilesPath = sys_get_temp_dir() . '/image-dimensions-tests-' . uniqid();
+        $this->service = new ImageDimensionsService;
+        $this->testFilesPath = sys_get_temp_dir().'/image-dimensions-tests-'.uniqid();
 
-        if (!is_dir($this->testFilesPath)) {
+        if (! is_dir($this->testFilesPath)) {
             mkdir($this->testFilesPath, 0777, true);
         }
 
         $img = imagecreate(10, 10);
         imagecolorallocate($img, 255, 255, 255);
-        imagepng($img, $this->testFilesPath . '/image.png');
+        imagepng($img, $this->testFilesPath.'/image.png');
         imagedestroy($img);
     }
 
     protected function tearDown(): void
     {
-        $files = glob($this->testFilesPath . '/*');
+        $files = glob($this->testFilesPath.'/*');
         foreach ($files as $file) {
             if (is_file($file)) {
                 @unlink($file);
@@ -53,17 +57,21 @@ class ExceptionHandlingTest extends TestCase
 
     // --- Local File Exceptions ---
 
-    /** @test */
+    #[Test]
     public function it_throws_for_non_existent_local_file(): void
     {
         $this->expectException(FileNotFoundException::class);
-        $this->service->fromLocal($this->testFilesPath . '/non-existent.jpg');
+        $this->service->fromLocal($this->testFilesPath.'/non-existent.jpg');
     }
 
-    /** @test */
+    #[Test]
     public function it_throws_for_unreadable_local_file(): void
     {
-        $path = $this->testFilesPath . '/unreadable.jpg';
+        if (function_exists('posix_geteuid') && posix_geteuid() === 0) {
+            $this->markTestSkipped('File permission checks are ineffective when running as root.');
+        }
+
+        $path = $this->testFilesPath.'/unreadable.jpg';
         touch($path);
         chmod($path, 0000); // Make the file unreadable
 
@@ -77,20 +85,20 @@ class ExceptionHandlingTest extends TestCase
         }
     }
 
-    /** @test */
+    #[Test]
     public function it_throws_for_corrupted_image_file(): void
     {
-        $path = $this->testFilesPath . '/corrupted.jpg';
+        $path = $this->testFilesPath.'/corrupted.jpg';
         file_put_contents($path, 'this is not a valid image');
 
         $this->expectException(InvalidImageException::class);
         $this->service->fromLocal($path);
     }
 
-    /** @test */
+    #[Test]
     public function it_throws_for_empty_local_file(): void
     {
-        $path = $this->testFilesPath . '/empty.png';
+        $path = $this->testFilesPath.'/empty.png';
         touch($path);
 
         $this->expectException(InvalidImageException::class);
@@ -100,7 +108,7 @@ class ExceptionHandlingTest extends TestCase
 
     // --- URL Exceptions ---
 
-    /** @test */
+    #[Test]
     public function it_throws_for_invalid_url_format(): void
     {
         $this->expectException(InvalidImageException::class);
@@ -108,23 +116,23 @@ class ExceptionHandlingTest extends TestCase
         $this->service->fromUrl('not-a-valid-url');
     }
 
-    /** @test */
-    public function it_throws_for_http_request_failure( ): void
+    #[Test]
+    public function it_throws_for_http_request_failure(): void
     {
         $url = 'https://example.com/not-found.jpg';
-        Http::fake([$url => Http::response(null, 404 )]);
+        Http::fake([$url => Http::response(null, 404)]);
 
         $this->expectException(UrlAccessException::class);
         $this->expectExceptionMessage("Could not open URL: {$url}");
         $this->service->fromUrl($url);
     }
 
-    /** @test */
+    #[Test]
     public function it_throws_for_network_connection_timeout(): void
     {
         $url = 'https://example.com/timeout.jpg';
         Http::fake([
-            $url => fn( ) => throw new ConnectionException('Timeout was reached'),
+            $url => fn () => throw new ConnectionException('Timeout was reached'),
         ]);
 
         $this->expectException(UrlAccessException::class);
@@ -132,11 +140,11 @@ class ExceptionHandlingTest extends TestCase
         $this->service->fromUrl($url);
     }
 
-    /** @test */
+    #[Test]
     public function it_throws_for_too_many_redirects(): void
     {
         $url = 'https://example.com/redirect-loop';
-        Http::fake([$url => Http::response(null, 302, ['Location' => $url] )]);
+        Http::fake([$url => Http::response(null, 302, ['Location' => $url])]);
 
         $this->expectException(UrlAccessException::class);
         $this->service->fromUrl($url);
@@ -144,7 +152,7 @@ class ExceptionHandlingTest extends TestCase
 
     // --- Storage Exceptions ---
 
-    /** @test */
+    #[Test]
     public function it_throws_for_non_existent_storage_disk(): void
     {
         $this->expectException(InvalidImageException::class);
@@ -152,7 +160,7 @@ class ExceptionHandlingTest extends TestCase
         $this->service->fromStorage('non-existent-disk', 'image.jpg');
     }
 
-    /** @test */
+    #[Test]
     public function it_throws_for_non_existent_file_on_storage_disk(): void
     {
         Storage::fake('test-disk');
@@ -160,7 +168,7 @@ class ExceptionHandlingTest extends TestCase
         $this->service->fromStorage('test-disk', 'non-existent.jpg');
     }
 
-    /** @test */
+    #[Test]
     public function it_throws_if_storage_stream_cannot_be_read(): void
     {
         $diskName = 's3_mock';
@@ -168,7 +176,7 @@ class ExceptionHandlingTest extends TestCase
 
         $mockDisk = Mockery::mock(Storage::getFacadeRoot());
         $mockDisk->shouldReceive('exists')->with($path)->andReturn(true);
-        $mockDisk->shouldReceive('getAdapter')->andReturn(new \stdClass());
+        $mockDisk->shouldReceive('getAdapter')->andReturn(new \stdClass);
         $mockDisk->shouldReceive('lastModified')->with($path)->andReturn(time());
         $mockDisk->shouldReceive('readStream')->with($path)->andReturn(false);
 
@@ -179,46 +187,48 @@ class ExceptionHandlingTest extends TestCase
         $this->service->fromStorage($diskName, $path);
     }
 
-    /** @test */
-    public function it_throws_if_storage_full_content_cannot_be_read_after_partial_failure(): void
+    #[Test]
+    public function it_throws_invalid_image_when_a_storage_stream_is_not_an_image(): void
     {
-
+        // A fully-readable but non-image stream that reaches EOF should surface
+        // an InvalidImageException (the stream is drained in place; there is no
+        // second "read full content" round-trip).
         $diskName = 's3_mock';
         $path = 'image.png';
 
-        // A stream with invalid data to cause an InvalidImageException
         $stream = fopen('php://memory', 'r+');
         fwrite($stream, 'invalid stream data');
         rewind($stream);
 
         Storage::shouldReceive('disk')->with($diskName)->andReturnSelf();
         Storage::shouldReceive('exists')->with($path)->andReturn(true);
-        Storage::shouldReceive('getAdapter')->andReturn(new \stdClass());
+        Storage::shouldReceive('getAdapter')->andReturn(new \stdClass);
         Storage::shouldReceive('lastModified')->with($path)->andReturn(time());
         Storage::shouldReceive('readStream')->with($path)->andReturn($stream);
-        Storage::shouldReceive('get')->with($path)->andReturn(null);
 
-        $this->expectException(StorageAccessException::class);
-        $this->expectExceptionMessage("Could not read full content from storage file: {$path}");
+        $this->expectException(InvalidImageException::class);
         $this->service->fromStorage($diskName, $path);
     }
 
     // --- Configuration Exceptions ---
 
-    /** @test */
+    #[Test]
     public function it_throws_if_temp_dir_is_not_writable_when_processing_url(): void
     {
-        $invalidDir = $this->testFilesPath . '/unwritable';
+        $url = 'https://example.com/image.png';
+        Http::fake([$url => Http::response('image data', 200)]);
+
+        $invalidDir = $this->testFilesPath.'/unwritable';
         mkdir($invalidDir, 0444, true); // Read-only
 
         Config::set('image-dimensions.temp_dir', $invalidDir);
-        $serviceWithBadConfig = new ImageDimensionsService();
+        $serviceWithBadConfig = new ImageDimensionsService;
 
         $this->expectException(TemporaryFileException::class);
         $this->expectExceptionMessage('Could not create temporary file');
 
         try {
-            $serviceWithBadConfig->fromUrl('https://example.com/image.png');
+            $serviceWithBadConfig->fromUrl($url);
         } finally {
             chmod($invalidDir, 0777);
             rmdir($invalidDir);

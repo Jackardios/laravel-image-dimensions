@@ -1,0 +1,13 @@
+* text=auto eol=lf
+
+# Exclude development-only files from the distributed package (`composer install`
+# from dist / Packagist archives).
+/.github            export-ignore
+/tests              export-ignore
+/build              export-ignore
+/.gitattributes     export-ignore
+/.gitignore         export-ignore
+/.editorconfig      export-ignore
+/phpunit.xml        export-ignore
+/phpstan.neon.dist  export-ignore
+/pint.json          export-ignore

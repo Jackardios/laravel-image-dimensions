@@ -11,18 +11,27 @@
         }
     ],
     "require": {
+        "php": "^8.2",
         "ext-dom": "*",
         "ext-fileinfo": "*",
         "ext-libxml": "*",
-        "illuminate/support": "^10.0 || ^11.0 || ^12.0",
-        "illuminate/filesystem": "^10.0 || ^11.0 || ^12.0"
+        "guzzlehttp/guzzle": "^7.8",
+        "illuminate/cache": "^12.0 || ^13.0",
+        "illuminate/contracts": "^12.0 || ^13.0",
+        "illuminate/filesystem": "^12.0 || ^13.0",
+        "illuminate/http": "^12.0 || ^13.0",
+        "illuminate/support": "^12.0 || ^13.0"
     },
     "require-dev": {
         "ext-gd": "*",
-        "orchestra/testbench": "^8.0 || ^9.0 || ^10.0",
-        "phpunit/phpunit": "^10.0 || ^11.0",
+        "larastan/larastan": "^3.0",
+        "laravel/pint": "^1.13",
         "league/flysystem-memory": "^3.0",
-        "guzzlehttp/guzzle": "^7.0"
+        "orchestra/testbench": "^10.0 || ^11.0",
+        "phpunit/phpunit": "^11.5 || ^12.0 || ^13.0"
+    },
+    "suggest": {
+        "league/flysystem-local": "Enables a faster local-filesystem path for Storage disks."
     },
     "autoload": {
         "psr-4": {
@@ -45,8 +54,21 @@
         }
     },
     "scripts": {
-        "test": "phpunit"
+        "test": "phpunit",
+        "analyse": "phpstan analyse --memory-limit=512M",
+        "format": "pint",
+        "lint": "pint --test",
+        "check": [
+            "@lint",
+            "@analyse",
+            "@test"
+        ]
     },
-    "minimum-stability": "dev",
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "phpstan/extension-installer": true
+        }
+    },
     "prefer-stable": true
 }

@@ -1,98 +1,153 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Jackardios\ImageDimensions;
 
-use DOMDocument;
+use Closure;
+use Illuminate\Contracts\Filesystem\Filesystem;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
+use Jackardios\ImageDimensions\Contracts\ImageDimensions as ImageDimensionsContract;
 use Jackardios\ImageDimensions\Exceptions\FileNotFoundException;
+use Jackardios\ImageDimensions\Exceptions\FileTooLargeException;
+use Jackardios\ImageDimensions\Exceptions\ImageDimensionsException;
 use Jackardios\ImageDimensions\Exceptions\InvalidImageException;
 use Jackardios\ImageDimensions\Exceptions\StorageAccessException;
 use Jackardios\ImageDimensions\Exceptions\TemporaryFileException;
 use Jackardios\ImageDimensions\Exceptions\UrlAccessException;
+use Jackardios\ImageDimensions\Exceptions\UrlNotAllowedException;
+use Jackardios\ImageDimensions\Support\SvgDimensionsExtractor;
+use Jackardios\ImageDimensions\Support\TemporaryFile;
+use Jackardios\ImageDimensions\Support\UrlGuard;
 use League\Flysystem\Local\LocalFilesystemAdapter;
+use SplFileInfo;
+use Symfony\Component\HttpFoundation\File\UploadedFile;
 use Throwable;
 
-class ImageDimensionsService
+class ImageDimensionsService implements ImageDimensionsContract
 {
+    /**
+     * Extensions that are definitively not SVG, used as a fast path in
+     * {@see looksLikeSvg()}. Keyed for O(1) lookup.
+     *
+     * @var array<string, true>
+     */
+    protected const RASTER_EXTENSIONS = [
+        'jpg' => true, 'jpeg' => true, 'png' => true, 'gif' => true,
+        'webp' => true, 'bmp' => true, 'avif' => true, 'ico' => true,
+        'tif' => true, 'tiff' => true,
+    ];
+
     protected int $remoteReadBytes;
+
+    protected int $maxDownloadBytes;
+
     protected string $tempDir;
+
     protected bool $enableCache;
-    protected int $cacheTtl;
+
+    protected ?int $cacheTtl;
+
     protected int $svgMaxFileSize;
+
+    /** @var array{timeout: int, connect_timeout: int, verify: bool} */
     protected array $httpOptions;
 
-    public function __construct()
+    protected SvgDimensionsExtractor $svgExtractor;
+
+    protected UrlGuard $urlGuard;
+
+    /**
+     * @param  array<string, mixed>|null  $config  Package config. When null, falls
+     *                                             back to the global `image-dimensions` config. Values are captured
+     *                                             at construction time.
+     */
+    public function __construct(?array $config = null)
     {
-        $config = config("image-dimensions", []);
+        $config ??= config('image-dimensions', []);
 
         $this->remoteReadBytes = max(8192, min(1048576, (int) ($config['remote_read_bytes'] ?? 131072))); // 8KB-1MB
+        $maxDownloadBytes = (int) ($config['max_download_bytes'] ?? 33554432);
+        // 0 means unlimited; otherwise never below the initial read size.
+        $this->maxDownloadBytes = $maxDownloadBytes <= 0 ? 0 : max($maxDownloadBytes, $this->remoteReadBytes);
         $this->tempDir = $config['temp_dir'] ?? sys_get_temp_dir();
         $this->enableCache = (bool) ($config['enable_cache'] ?? true);
-        $this->cacheTtl = max(0, (int) ($config['cache_ttl'] ?? 3600));
+        // null => cache forever; <= 0 => do not cache; otherwise, seconds.
+        $rawTtl = array_key_exists('cache_ttl', $config) ? $config['cache_ttl'] : 3600;
+        $this->cacheTtl = $rawTtl === null ? null : (int) $rawTtl;
         $this->svgMaxFileSize = max(0, (int) ($config['svg']['max_file_size'] ?? 10485760));
         $this->httpOptions = [
             'timeout' => max(0, (int) ($config['http']['timeout'] ?? 60)),
             'connect_timeout' => max(0, (int) ($config['http']['connect_timeout'] ?? 10)),
             'verify' => (bool) ($config['http']['verify_ssl'] ?? true),
         ];
+        $this->svgExtractor = new SvgDimensionsExtractor;
+
+        $urlConfig = is_array($config['url'] ?? null) ? $config['url'] : [];
+        $this->urlGuard = new UrlGuard(
+            (bool) ($urlConfig['allow_private_hosts'] ?? false),
+            is_array($urlConfig['allowed_hosts'] ?? null) ? array_values($urlConfig['allowed_hosts']) : [],
+            (int) ($urlConfig['max_redirects'] ?? 5),
+        );
     }
 
     /**
      * Get image dimensions from a local file.
      *
-     * @param string $path
-     * @return array{width: int, height: int}
      * @throws FileNotFoundException
      * @throws InvalidImageException
      */
-    public function fromLocal(string $path): array
+    public function fromLocal(string $path): Dimensions
     {
         $path = trim($path);
 
         if ($path === '') {
-            throw new InvalidImageException("Path must be a non-empty string");
+            throw new InvalidImageException('Path must be a non-empty string');
         }
 
         // Resolve real path to handle symlinks and relative paths
         $realPath = realpath($path);
-        if ($realPath === false || !file_exists($realPath)) {
+        if ($realPath === false || ! is_file($realPath)) {
             throw FileNotFoundException::forLocal($path);
         }
 
-        if (!is_readable($realPath)) {
+        if (! is_readable($realPath)) {
             throw new InvalidImageException("File is not readable: {$path}");
         }
 
-        $cacheKey = $this->getCacheKey('local', $realPath, filemtime($realPath));
+        $modifiedTime = @filemtime($realPath);
+        $cacheKey = $this->getCacheKey('local', $realPath, $modifiedTime === false ? null : $modifiedTime);
 
         return $this->getCachedOrCompute($cacheKey, function () use ($realPath) {
-            return $this->getDimensionsFromPath($realPath);
+            return $this->analyzeFile($realPath, $realPath);
         });
     }
 
     /**
      * Get image dimensions from a URL.
      *
-     * @param string $url
-     * @return array{width: int, height: int}
      * @throws TemporaryFileException
      * @throws UrlAccessException
+     * @throws UrlNotAllowedException
      * @throws InvalidImageException
      */
-    public function fromUrl(string $url): array
+    public function fromUrl(string $url): Dimensions
     {
         $url = trim($url);
 
-        if (!filter_var($url, FILTER_VALIDATE_URL)) {
+        if (! filter_var($url, FILTER_VALIDATE_URL)) {
             throw new InvalidImageException("Invalid URL provided: {$url}");
         }
 
         $scheme = parse_url($url, PHP_URL_SCHEME);
-        if (!in_array($scheme, ['http', 'https'], true)) {
-            throw new InvalidImageException("Only HTTP and HTTPS URLs are supported");
+        if (! in_array($scheme, ['http', 'https'], true)) {
+            throw new InvalidImageException('Only HTTP and HTTPS URLs are supported');
         }
+
+        // SSRF guard: reject private/reserved hosts (unless explicitly allowed).
+        $this->urlGuard->assertAllowed($url);
 
         $cacheKey = $this->getCacheKey('url', $url);
 
@@ -104,25 +159,22 @@ class ImageDimensionsService
     /**
      * Get image dimensions from a Laravel Storage file.
      *
-     * @param string $diskName
-     * @param string $path
-     * @return array{width: int, height: int}
      * @throws FileNotFoundException
      * @throws TemporaryFileException
      * @throws StorageAccessException
      * @throws InvalidImageException
      */
-    public function fromStorage(string $diskName, string $path): array
+    public function fromStorage(string $diskName, string $path): Dimensions
     {
         $diskName = trim($diskName);
         $path = trim($path);
 
         if ($diskName === '') {
-            throw new InvalidImageException("Disk name must be a non-empty string");
+            throw new InvalidImageException('Disk name must be a non-empty string');
         }
 
         if ($path === '') {
-            throw new InvalidImageException("Path must be a non-empty string");
+            throw new InvalidImageException('Path must be a non-empty string');
         }
 
         try {
@@ -131,16 +183,25 @@ class ImageDimensionsService
             throw new InvalidImageException("Storage disk '{$diskName}' does not exist");
         }
 
-        if (!$disk->exists($path)) {
+        if (! $disk->exists($path)) {
             throw FileNotFoundException::forStorage($diskName, $path);
         }
 
-        $adapter = $disk->getAdapter();
-        if ($adapter instanceof LocalFilesystemAdapter) {
+        // Fast path: a local disk is just a filesystem path, so reuse fromLocal
+        // (which also enables its extension-aware format detection and caching).
+        if (method_exists($disk, 'getAdapter') && $disk->getAdapter() instanceof LocalFilesystemAdapter) {
             return $this->fromLocal($disk->path($path));
         }
 
-        $cacheKey = $this->getCacheKey('storage', "{$diskName}:{$path}", $disk->lastModified($path));
+        // The modification time invalidates the cache when the file changes;
+        // some drivers cannot report it, in which case the key omits it.
+        try {
+            $modifiedTime = $disk->lastModified($path);
+        } catch (Throwable) {
+            $modifiedTime = null;
+        }
+
+        $cacheKey = $this->getCacheKey('storage', "{$diskName}:{$path}", $modifiedTime);
 
         return $this->getCachedOrCompute($cacheKey, function () use ($disk, $path) {
             return $this->getDimensionsFromStorage($disk, $path);
@@ -148,347 +209,432 @@ class ImageDimensionsService
     }
 
     /**
-     * Get dimensions from URL with optimized downloading
-     * @throws TemporaryFileException
-     * @throws UrlAccessException
-     */
-    protected function getDimensionsFromUrl(string $url): array
-    {
-        $tempFile = $this->createTempFile('url');
-        $stream = null;
-
-        try {
-            // First attempt with partial read
-            $response = Http::withOptions([
-                ...$this->httpOptions,
-                'stream' => true,
-            ])->get($url);
-
-            if ($response->failed()) {
-                throw UrlAccessException::couldNotOpen($url);
-            }
-
-            $stream = $response->toPsrResponse()->getBody()->detach();
-            if (!is_resource($stream)) {
-                throw UrlAccessException::couldNotOpen($url);
-            }
-
-            try {
-                // Try with partial content first
-                $this->readStreamToFile($stream, $tempFile, $this->remoteReadBytes);
-                return $this->getDimensionsFromPath($tempFile);
-            } catch (InvalidImageException) {
-                // If partial read failed, download full file
-                if (is_resource($stream)) {
-                    fclose($stream);
-                }
-
-                $fullResponse = Http::withOptions($this->httpOptions)->get($url);
-                if ($fullResponse->failed()) {
-                    throw UrlAccessException::couldNotDownload($url);
-                }
-
-                $content = $fullResponse->body();
-                if (file_put_contents($tempFile, $content) === false) {
-                    throw TemporaryFileException::couldNotWrite();
-                }
-
-                return $this->getDimensionsFromPath($tempFile);
-            } catch (Throwable $e) {
-                throw UrlAccessException::couldNotDownload($url, $e);
-            }
-        } catch (UrlAccessException $e) {
-            throw $e;
-        } catch (Throwable $e) {
-            throw UrlAccessException::couldNotOpen($url, $e);
-        } finally {
-            if (is_resource($stream)) {
-                @fclose($stream);
-            }
-            if (file_exists($tempFile)) {
-                @unlink($tempFile);
-            }
-        }
-    }
-
-    /**
-     * Get dimensions from storage with streaming support
-     * @throws StorageAccessException
-     * @throws TemporaryFileException
-     * @throws InvalidImageException
-     */
-    protected function getDimensionsFromStorage($disk, string $path): array
-    {
-        $tempFile = $this->createTempFile('storage');
-        $stream = null;
-
-        try {
-            $stream = $disk->readStream($path);
-            if (!is_resource($stream)) {
-                throw StorageAccessException::couldNotReadStream($path);
-            }
-
-            try {
-                $this->readStreamToFile($stream, $tempFile, $this->remoteReadBytes);
-                return $this->getDimensionsFromPath($tempFile);
-            } catch (InvalidImageException $e) {
-                // If partial read failed, read entire file
-                if (is_resource($stream)) {
-                    fclose($stream);
-                }
-
-                $fullContent = $disk->get($path);
-                if ($fullContent === null) {
-                    throw StorageAccessException::couldNotReadFullContent($path);
-                }
-
-                if (file_put_contents($tempFile, $fullContent) === false) {
-                    throw TemporaryFileException::couldNotWrite();
-                }
-
-                return $this->getDimensionsFromPath($tempFile);
-            }
-        } finally {
-            if (is_resource($stream)) {
-                @fclose($stream);
-            }
-            if (file_exists($tempFile)) {
-                @unlink($tempFile);
-            }
-        }
-    }
-
-    /**
-     * Get image dimensions from a file path.
+     * Get image dimensions from raw binary image contents.
      *
-     * @param string $filePath
-     * @return array{width: int, height: int}
+     * The result is not cached (there is no stable identity to key on).
+     *
+     * @throws TemporaryFileException
      * @throws InvalidImageException
      */
-    protected function getDimensionsFromPath(string $filePath): array
+    public function fromContents(string $contents): Dimensions
     {
-        $fileSize = @filesize($filePath);
-        if ($fileSize === false || $fileSize === 0) {
-            throw InvalidImageException::forPath($filePath, "File is empty.");
+        if ($contents === '') {
+            throw new InvalidImageException('Contents must be a non-empty string.');
         }
 
-        $extension = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
-        $mimeType = mime_content_type($filePath) ?: '';
+        if ($this->maxDownloadBytes > 0 && strlen($contents) > $this->maxDownloadBytes) {
+            throw FileTooLargeException::forDownload($this->maxDownloadBytes);
+        }
 
-        // Handle SVG separately
-        if ($extension === 'svg' || str_contains($mimeType, 'svg')) {
-            if ($fileSize > $this->svgMaxFileSize) {
-                throw new InvalidImageException("SVG file is too large (max " . $this->svgMaxFileSize . " bytes)");
+        $temp = new TemporaryFile($this->tempDir, 'imgdim_contents_');
+        $temp->append($contents);
+
+        return Dimensions::fromArray($this->analyzeFile($temp->path(), null, '(contents)'));
+    }
+
+    /**
+     * Get image dimensions from an open, readable stream resource.
+     *
+     * The result is not cached. The stream is read but not closed — the caller
+     * owns it.
+     *
+     * @param  resource  $stream
+     *
+     * @throws TemporaryFileException
+     * @throws InvalidImageException
+     */
+    public function fromStream($stream): Dimensions
+    {
+        if (! is_resource($stream)) {
+            throw new InvalidImageException('A readable stream resource is required.');
+        }
+
+        $temp = new TemporaryFile($this->tempDir, 'imgdim_stream_');
+        $limit = $this->maxDownloadBytes;
+
+        if ($limit > 0) {
+            // Read one byte past the cap so an overflow is detectable.
+            while ($temp->bytesWritten() <= $limit) {
+                if ($temp->appendFromStream($stream, $limit + 1 - $temp->bytesWritten()) === 0) {
+                    break;
+                }
             }
-            return $this->getSvgDimensions($filePath);
+
+            if ($temp->bytesWritten() > $limit) {
+                throw FileTooLargeException::forDownload($limit);
+            }
+        } else {
+            while ($temp->appendFromStream($stream, 1048576) > 0) {
+                // keep reading until the stream is exhausted
+            }
         }
 
-        $size = @getimagesize($filePath);
-        if ($size === false) {
-            throw InvalidImageException::forPath($filePath, "Could not determine image dimensions");
+        return Dimensions::fromArray($this->analyzeFile($temp->path(), null, '(stream)'));
+    }
+
+    /**
+     * Get image dimensions from an uploaded file (Illuminate/Symfony UploadedFile
+     * or any SplFileInfo).
+     *
+     * The result is deliberately NOT cached: PHP recycles upload temp names
+     * (`/tmp/phpXXXXXX`) and filemtime only has one-second granularity, so a
+     * path+mtime cache key can collide across two different uploads and return
+     * another request's dimensions.
+     *
+     * @throws FileNotFoundException
+     * @throws InvalidImageException
+     */
+    public function fromUploadedFile(SplFileInfo $file): Dimensions
+    {
+        $path = $file->getRealPath();
+        if ($path === false || $path === '') {
+            $path = $file->getPathname();
         }
 
+        if ($path === '' || ! is_file($path)) {
+            throw FileNotFoundException::forLocal($path);
+        }
+
+        if (! is_readable($path)) {
+            throw new InvalidImageException("File is not readable: {$path}");
+        }
+
+        $label = $file instanceof UploadedFile
+            ? ($file->getClientOriginalName() ?: $path)
+            : $path;
+
+        return Dimensions::fromArray($this->analyzeFile($path, $label, $label));
+    }
+
+    /**
+     * @see fromLocal()
+     */
+    public function tryFromLocal(string $path): ?Dimensions
+    {
+        return $this->attempt(fn () => $this->fromLocal($path));
+    }
+
+    /**
+     * @see fromUrl()
+     */
+    public function tryFromUrl(string $url): ?Dimensions
+    {
+        return $this->attempt(fn () => $this->fromUrl($url));
+    }
+
+    /**
+     * @see fromStorage()
+     */
+    public function tryFromStorage(string $diskName, string $path): ?Dimensions
+    {
+        return $this->attempt(fn () => $this->fromStorage($diskName, $path));
+    }
+
+    /**
+     * @see fromContents()
+     */
+    public function tryFromContents(string $contents): ?Dimensions
+    {
+        return $this->attempt(fn () => $this->fromContents($contents));
+    }
+
+    /**
+     * @see fromStream()
+     *
+     * @param  resource  $stream
+     */
+    public function tryFromStream($stream): ?Dimensions
+    {
+        return $this->attempt(fn () => $this->fromStream($stream));
+    }
+
+    /**
+     * @see fromUploadedFile()
+     */
+    public function tryFromUploadedFile(SplFileInfo $file): ?Dimensions
+    {
+        return $this->attempt(fn () => $this->fromUploadedFile($file));
+    }
+
+    /**
+     * Run a resolver, converting any package exception into a null result.
+     * Non-package throwables (e.g. TypeError) are NOT swallowed.
+     *
+     * @param  callable(): Dimensions  $resolver
+     */
+    protected function attempt(callable $resolver): ?Dimensions
+    {
+        try {
+            return $resolver();
+        } catch (ImageDimensionsException) {
+            return null;
+        }
+    }
+
+    /**
+     * Guzzle options for an image fetch: stream the body rather than buffering
+     * it, and re-validate every redirect hop against the SSRF guard.
+     *
+     * @return array<string, mixed>
+     */
+    protected function requestOptions(): array
+    {
         return [
-            'width' => (int) $size[0],
-            'height' => (int) $size[1]
+            ...$this->httpOptions,
+            'stream' => true,
+            'allow_redirects' => [
+                'max' => $this->urlGuard->maxRedirects(),
+                'strict' => true,
+                'referer' => false,
+                'protocols' => ['http', 'https'],
+                'on_redirect' => $this->urlGuard->redirectGuard(),
+            ],
         ];
     }
 
     /**
-     * Get SVG dimensions from file.
+     * Get dimensions from a URL, reading only as much of the body as needed.
      *
-     * @param string $filePath
      * @return array{width: int, height: int}
+     *
+     * @throws UrlAccessException
+     * @throws TemporaryFileException
+     * @throws FileTooLargeException
      * @throws InvalidImageException
      */
-    protected function getSvgDimensions(string $filePath): array
+    protected function getDimensionsFromUrl(string $url): array
     {
-        $content = file_get_contents($filePath);
-        if ($content === false) {
-            throw InvalidImageException::forPath($filePath);
+        try {
+            $response = Http::withOptions($this->requestOptions())->get($url);
+        } catch (UrlNotAllowedException $e) {
+            // A redirect hop pointed at a disallowed host; keep the SSRF verdict.
+            throw $e;
+        } catch (Throwable $e) {
+            // Connection failures, redirect loops, DNS errors, etc.
+            throw UrlAccessException::couldNotOpen($url, $e);
         }
 
-        $previousUseInternalErrors = libxml_use_internal_errors(true);
-        $previousEntityLoader = libxml_disable_entity_loader(true);
+        if ($response->failed()) {
+            throw UrlAccessException::couldNotOpen($url, null, $response->status());
+        }
+
+        $this->assertContentLengthWithinLimit($response->header('Content-Length'));
+
+        $stream = $response->toPsrResponse()->getBody()->detach();
+        if (! is_resource($stream)) {
+            throw UrlAccessException::couldNotOpen($url);
+        }
+
+        $temp = new TemporaryFile($this->tempDir, 'imgdim_url_');
 
         try {
-            $doc = new DOMDocument();
-            $content = $this->sanitizeSvgContent($content);
+            return $this->resolveFromStream($stream, $temp, parse_url($url, PHP_URL_PATH) ?: null, $url);
+        } finally {
+            @fclose($stream);
+        }
+    }
 
-            if (!$doc->loadXML($content, LIBXML_NONET | LIBXML_NOENT)) {
-                $errors = libxml_get_errors();
-                $errorMessage = !empty($errors) ? $errors[0]->message : "Invalid XML content";
-                throw InvalidImageException::forPath($filePath, $errorMessage);
+    /**
+     * Get dimensions from a storage disk stream, reading only as much as needed.
+     *
+     * @param  Filesystem  $disk
+     * @return array{width: int, height: int}
+     *
+     * @throws StorageAccessException
+     * @throws TemporaryFileException
+     * @throws FileTooLargeException
+     * @throws InvalidImageException
+     */
+    protected function getDimensionsFromStorage($disk, string $path): array
+    {
+        try {
+            $stream = $disk->readStream($path);
+        } catch (Throwable $e) {
+            // Keep the driver's real cause (auth failure, timeout, missing
+            // bucket) reachable via getPrevious() for logging.
+            throw StorageAccessException::couldNotReadStream($path, $e);
+        }
+
+        if (! is_resource($stream)) {
+            throw StorageAccessException::couldNotReadStream($path);
+        }
+
+        $temp = new TemporaryFile($this->tempDir, 'imgdim_storage_');
+
+        try {
+            return $this->resolveFromStream($stream, $temp, $path);
+        } finally {
+            @fclose($stream);
+        }
+    }
+
+    /**
+     * Resolve dimensions from an open stream.
+     *
+     * Reads a header-sized chunk first; if that is not enough to determine the
+     * dimensions, keeps reading the SAME stream (no second request, no full
+     * in-memory buffering) up to the configured download limit.
+     *
+     * @param  resource  $stream
+     * @return array{width: int, height: int}
+     *
+     * @throws FileTooLargeException
+     * @throws TemporaryFileException
+     * @throws InvalidImageException
+     */
+    protected function resolveFromStream($stream, TemporaryFile $temp, ?string $nameHint, ?string $label = null): array
+    {
+        $temp->appendFromStream($stream, $this->remoteReadBytes);
+
+        try {
+            return $this->analyzeFile($temp->path(), $nameHint, $label);
+        } catch (FileTooLargeException $e) {
+            // A size cap was already exceeded (e.g. svg.max_file_size). Reading
+            // further would only waste bandwidth — this is final, not a
+            // "header was too short" failure.
+            throw $e;
+        } catch (InvalidImageException $e) {
+            // The header alone was insufficient. If more data is available,
+            // continue filling the same temp file and retry once.
+            if (feof($stream)) {
+                throw $e;
             }
 
-            $svg = $doc->documentElement;
-            if (!$svg || $svg->tagName !== 'svg') {
-                throw new InvalidImageException("Invalid SVG file: {$filePath}");
-            }
+            $limit = $this->maxDownloadBytes;
 
-            $width = $this->parseSvgDimension($svg->getAttribute('width'));
-            $height = $this->parseSvgDimension($svg->getAttribute('height'));
-
-            // Try viewBox if dimensions are not set or invalid
-            if (($width === null || $height === null) && $svg->hasAttribute('viewBox')) {
-                $viewBox = preg_split('/[\s,]+/', trim($svg->getAttribute('viewBox')));
-                if (count($viewBox) === 4) {
-                    $viewBoxWidth = abs((float) $viewBox[2] - (float) $viewBox[0]);
-                    $viewBoxHeight = abs((float) $viewBox[3] - (float) $viewBox[1]);
-
-                    $width = $width ?? (int) ceil($viewBoxWidth);
-                    $height = $height ?? (int) ceil($viewBoxHeight);
+            if ($limit > 0) {
+                // Read up to the cap, plus one byte to detect an overflow.
+                $remaining = $limit + 1 - $temp->bytesWritten();
+                if ($remaining > 0) {
+                    $temp->appendFromStream($stream, $remaining);
+                }
+                if ($temp->bytesWritten() > $limit) {
+                    throw FileTooLargeException::forDownload($limit);
+                }
+            } else {
+                // No cap: drain the stream in large chunks until it is
+                // exhausted (appendFromStream returns 0 once there is no more).
+                while ($temp->appendFromStream($stream, 1048576) > 0) {
+                    // keep reading
                 }
             }
 
-            if ($width === null || $height === null || $width <= 0 || $height <= 0) {
-                throw new InvalidImageException("Could not determine SVG dimensions: {$filePath}");
+            return $this->analyzeFile($temp->path(), $nameHint, $label);
+        }
+    }
+
+    /**
+     * Reject a response whose declared Content-Length exceeds the download cap
+     * before any body is read.
+     *
+     * @throws FileTooLargeException
+     */
+    protected function assertContentLengthWithinLimit(string $contentLength): void
+    {
+        if ($this->maxDownloadBytes <= 0 || $contentLength === '') {
+            return;
+        }
+
+        // A duplicated header arrives joined as "123, 123", and values may carry
+        // surrounding whitespace; take the first token so the pre-download check
+        // is not silently skipped.
+        $first = trim(explode(',', $contentLength)[0]);
+
+        if (ctype_digit($first) && (int) $first > $this->maxDownloadBytes) {
+            throw FileTooLargeException::forDownload($this->maxDownloadBytes);
+        }
+    }
+
+    /**
+     * Determine image dimensions for a file already on the local filesystem.
+     *
+     * @param  string  $path  Filesystem path to read.
+     * @param  string|null  $nameHint  Original name/path used for extension-based
+     *                                 format detection. Needed because remote sources are written to
+     *                                 extension-less temp files.
+     * @param  string|null  $label  Human-readable source description for error
+     *                              messages. Defaults to the name hint. Never falls back to $path, which
+     *                              would leak the internal temp-file location to callers.
+     * @return array{width: int, height: int}
+     *
+     * @throws InvalidImageException
+     * @throws FileTooLargeException
+     */
+    protected function analyzeFile(string $path, ?string $nameHint = null, ?string $label = null): array
+    {
+        $label ??= $nameHint ?? '(unknown source)';
+
+        $fileSize = @filesize($path);
+        if ($fileSize === false || $fileSize === 0) {
+            throw InvalidImageException::forPath($label, 'File is empty.');
+        }
+
+        if ($this->looksLikeSvg($path, $nameHint)) {
+            if ($this->svgMaxFileSize > 0 && $fileSize > $this->svgMaxFileSize) {
+                throw FileTooLargeException::forSvg($this->svgMaxFileSize);
             }
 
-            return ['width' => $width, 'height' => $height];
-        } finally {
-            libxml_clear_errors();
-            libxml_use_internal_errors($previousUseInternalErrors);
-            libxml_disable_entity_loader($previousEntityLoader);
+            $content = @file_get_contents($path);
+            if ($content === false) {
+                throw InvalidImageException::forPath($label, 'Could not read SVG file.');
+            }
+
+            return $this->svgExtractor->extract($content)->toArray();
         }
+
+        $size = @getimagesize($path);
+        if ($size === false || (int) $size[0] <= 0 || (int) $size[1] <= 0) {
+            throw InvalidImageException::forPath($label, 'Could not determine image dimensions');
+        }
+
+        return ['width' => (int) $size[0], 'height' => (int) $size[1]];
     }
 
     /**
-     * Sanitize SVG content to remove potentially dangerous elements
+     * Decide whether a file should be treated as SVG, using (in order) the
+     * hinted extension, the detected MIME type, and a content sniff. The sniff
+     * covers remote SVGs stored in extension-less temp files with no reliable
+     * MIME type.
      */
-    protected function sanitizeSvgContent(string $content): string
+    protected function looksLikeSvg(string $path, ?string $nameHint): bool
     {
-        // Remove script tags
-        $content = preg_replace('/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/mi', '', $content);
-
-        // Remove on* event attributes
-        $content = preg_replace('/\s*on\w+\s*=\s*["\'][^"\']*["\']/i', '', $content);
-
-        // Remove external references in DOCTYPE
-        $content = preg_replace('/<!DOCTYPE[^>]*>/i', '', $content);
-
-        return $content;
-    }
-
-    /**
-     * Parse SVG dimension value.
-     *
-     * @param string $value
-     * @return int|null
-     */
-    protected function parseSvgDimension(string $value): ?int
-    {
-        $value = trim($value);
-
-        if ($value === '' || $value === 'auto') {
-            return null;
+        $extension = strtolower(pathinfo($nameHint ?? $path, PATHINFO_EXTENSION));
+        if ($extension === 'svg') {
+            return true;
         }
 
-        if (str_ends_with($value, '%')) {
-            return null;
+        // A known raster extension settles it — skip the MIME probe and content
+        // sniff, which would otherwise open the file twice more before
+        // getimagesize() opens it again.
+        if (isset(self::RASTER_EXTENSIONS[$extension])) {
+            return false;
         }
 
-        if (preg_match('/^(\d+(?:\.\d+)?)\s*(px)?$/i', $value, $matches)) {
-            $number = (float) $matches[1];
-            return (int) ceil($number);
+        $mimeType = @mime_content_type($path) ?: '';
+        if (str_contains($mimeType, 'svg')) {
+            return true;
         }
 
-        return null;
-    }
-
-    /**
-     * Read stream to file.
-     *
-     * @param resource $stream
-     * @param string $filePath
-     * @param int $maxBytes
-     * @throws TemporaryFileException
-     */
-    protected function readStreamToFile($stream, string $filePath, int $maxBytes): void
-    {
-        $handle = @fopen($filePath, 'wb');
+        $handle = @fopen($path, 'rb');
         if ($handle === false) {
-            throw TemporaryFileException::couldNotWrite();
+            return false;
         }
 
-        try {
-            $bytesRead = 0;
-            $emptyReads = 0;
-            $maxEmptyReads = 3;
+        $head = @fread($handle, 4096);
+        @fclose($handle);
 
-            while (!feof($stream) && $bytesRead < $maxBytes && $emptyReads < $maxEmptyReads) {
-                $remaining = $maxBytes - $bytesRead;
-                $chunkSize = min(8192, $remaining);
-
-                $chunk = @fread($stream, $chunkSize);
-                if ($chunk === false) {
-                    break;
-                }
-
-                if ($chunk === '') {
-                    $emptyReads++;
-                    usleep(1000);
-                    continue;
-                }
-
-                $emptyReads = 0;
-
-                $written = @fwrite($handle, $chunk);
-                if ($written === false) {
-                    throw TemporaryFileException::couldNotWrite();
-                }
-
-                $bytesRead += $written;
-
-                if ($written < strlen($chunk)) {
-                    break;
-                }
-            }
-
-            if ($bytesRead === 0) {
-                throw TemporaryFileException::couldNotWrite();
-            }
-        } finally {
-            @fclose($handle);
-        }
-    }
-
-    /**
-     * Create temporary file.
-     *
-     * @param string $prefix
-     * @return string
-     * @throws TemporaryFileException
-     */
-    protected function createTempFile(string $prefix): string
-    {
-        if (!is_dir($this->tempDir) || !is_writable($this->tempDir)) {
-            throw TemporaryFileException::couldNotCreate();
-        }
-
-        $maxAttempts = 3;
-        for ($i = 0; $i < $maxAttempts; $i++) {
-            $tempFile = @tempnam($this->tempDir, "imgdim_{$prefix}_");
-            if ($tempFile !== false) {
-                return $tempFile;
-            }
-            usleep(10000); // 10ms
-        }
-
-        throw TemporaryFileException::couldNotCreate();
+        return $head !== false && $head !== '' && SvgDimensionsExtractor::sniff($head);
     }
 
     /**
      * Get cache key.
      *
-     * @param string $type
-     * @param string $identifier
-     * @param int|null $modifiedTime
-     * @return string
+     * The `v2` segment invalidates entries written by v1, which could hold
+     * incorrect dimensions from the old viewBox miscalculation.
      */
     protected function getCacheKey(string $type, string $identifier, ?int $modifiedTime = null): string
     {
-        $key = "image_dimensions:{$type}:" . md5($identifier);
+        $key = "image_dimensions:v2:{$type}:".md5($identifier);
         if ($modifiedTime !== null) {
             $key .= ":{$modifiedTime}";
         }
@@ -499,16 +645,24 @@ class ImageDimensionsService
     /**
      * Get cached value or compute and cache.
      *
-     * @param string $key
-     * @param callable $callback
-     * @return array{width: int, height: int}
+     * The callback returns a primitive `array{width, height}` so cache stores
+     * hold plain data (v1-compatible); the result is hydrated into a
+     * {@see Dimensions} value object before returning.
+     *
+     * @param  Closure(): array{width: int, height: int}  $callback
      */
-    protected function getCachedOrCompute(string $key, callable $callback): array
+    protected function getCachedOrCompute(string $key, Closure $callback): Dimensions
     {
-        if (!$this->enableCache) {
-            return $callback();
+        // Caching off, or a non-positive finite TTL ("do not cache").
+        if (! $this->enableCache || ($this->cacheTtl !== null && $this->cacheTtl <= 0)) {
+            return Dimensions::fromArray($callback());
         }
 
-        return Cache::remember($key, $this->cacheTtl, $callback);
+        // A null TTL means "cache indefinitely".
+        if ($this->cacheTtl === null) {
+            return Dimensions::fromArray(Cache::rememberForever($key, $callback));
+        }
+
+        return Dimensions::fromArray(Cache::remember($key, $this->cacheTtl, $callback));
     }
 }

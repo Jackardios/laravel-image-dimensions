@@ -17,6 +17,21 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Maximum Download Bytes
+    |--------------------------------------------------------------------------
+    |
+    | The maximum number of bytes to read from a remote source (URL or cloud
+    | storage) when the initial partial read is not enough to determine the
+    | image dimensions. This bounds memory/bandwidth usage for non-image or
+    | truncated responses. Sources larger than this raise a
+    | FileTooLargeException. Set to 0 to disable the limit (not recommended).
+    | Default: 33554432 (32MB)
+    |
+    */
+    'max_download_bytes' => env('IMAGE_DIMENSIONS_MAX_DOWNLOAD_BYTES', 33554432),
+
+    /*
+    |--------------------------------------------------------------------------
     | Temporary Directory
     |--------------------------------------------------------------------------
     |
@@ -43,8 +58,14 @@ return [
     | Cache TTL (Time To Live)
     |--------------------------------------------------------------------------
     |
-    | The number of seconds to cache image dimensions. Set to 0 to cache
-    | indefinitely (not recommended for remote images).
+    | The number of seconds to cache image dimensions. Set to null to cache
+    | indefinitely (not recommended for remote images). A value of 0 or less
+    | disables caching for these lookups.
+    |
+    | Note: local/storage cache keys include the file's modification time, so a
+    | changed file is looked up under a new key and the previous entry is left
+    | to expire on its own. With a null TTL nothing expires, so entries for
+    | frequently rewritten files accumulate — prefer a finite TTL there.
     |
     */
     'cache_ttl' => env('IMAGE_DIMENSIONS_CACHE_TTL', 3600), // 1 hour
@@ -61,6 +82,30 @@ return [
         'timeout' => env('IMAGE_DIMENSIONS_HTTP_TIMEOUT', 60),
         'connect_timeout' => env('IMAGE_DIMENSIONS_HTTP_CONNECT_TIMEOUT', 10),
         'verify_ssl' => env('IMAGE_DIMENSIONS_HTTP_VERIFY_SSL', true),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | URL / SSRF Protection
+    |--------------------------------------------------------------------------
+    |
+    | Controls which URLs fromUrl() is allowed to fetch, mitigating Server-Side
+    | Request Forgery (SSRF).
+    |
+    | - allow_private_hosts: when false (default), hosts resolving to private,
+    |   loopback, link-local, or reserved IP ranges (IPv4 and IPv6) are blocked,
+    |   including cloud metadata endpoints such as 169.254.169.254. Set to true
+    |   to restore the unrestricted behaviour (not recommended).
+    | - allowed_hosts: when non-empty, ONLY these hostnames may be fetched — a
+    |   strict allowlist that also mitigates DNS rebinding.
+    | - max_redirects: maximum number of redirects to follow; each hop is
+    |   re-validated against the rules above.
+    |
+    */
+    'url' => [
+        'allow_private_hosts' => env('IMAGE_DIMENSIONS_URL_ALLOW_PRIVATE_HOSTS', false),
+        'allowed_hosts' => array_filter(explode(',', (string) env('IMAGE_DIMENSIONS_URL_ALLOWED_HOSTS', ''))),
+        'max_redirects' => env('IMAGE_DIMENSIONS_URL_MAX_REDIRECTS', 5),
     ],
 
     /*

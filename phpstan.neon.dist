@@ -1,0 +1,13 @@
+includes:
+    - vendor/larastan/larastan/extension.neon
+
+parameters:
+    level: 8
+    paths:
+        - src
+    tmpDir: build/phpstan
+    # Storage::disk() is typed as a concrete FilesystemAdapter via PHPDoc, but at
+    # runtime a custom driver may return any Filesystem implementation. Treating
+    # these PHPDoc types as uncertain keeps the defensive method_exists() guard
+    # in fromStorage() from being reported as "always true".
+    treatPhpDocTypesAsCertain: false

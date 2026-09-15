@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Jackardios\ImageDimensions\Exceptions;
 
@@ -14,5 +16,3 @@ class FileNotFoundException extends ImageDimensionsException
         return new self("File not found on disk '{$diskName}': {$path}");
     }
 }
-
-

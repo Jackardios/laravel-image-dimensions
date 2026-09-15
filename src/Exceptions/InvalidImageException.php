@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Jackardios\ImageDimensions\Exceptions;
 
@@ -10,6 +12,7 @@ class InvalidImageException extends ImageDimensionsException
         if ($reason) {
             $message .= " Reason: {$reason}";
         }
+
         return new self($message);
     }
 }
