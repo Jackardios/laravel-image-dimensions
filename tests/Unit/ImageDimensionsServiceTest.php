@@ -239,7 +239,7 @@ class ImageDimensionsServiceTest extends TestCase
         config(['image-dimensions.enable_cache' => true, 'image-dimensions.cache_ttl' => 120]);
         $service = new ImageDimensionsService;
         $path = $this->createImage('test.png', 100, 200);
-        $cacheKey = 'image_dimensions:local:'.md5(realpath($path)).':'.filemtime($path);
+        $cacheKey = 'image_dimensions:v1.1:local:'.md5(realpath($path)).':'.filemtime($path);
 
         Cache::shouldReceive('remember')
             ->once()

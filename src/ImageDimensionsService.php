@@ -2,7 +2,6 @@
 
 namespace Jackardios\ImageDimensions;
 
-use DOMDocument;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
@@ -11,6 +10,7 @@ use Jackardios\ImageDimensions\Exceptions\InvalidImageException;
 use Jackardios\ImageDimensions\Exceptions\StorageAccessException;
 use Jackardios\ImageDimensions\Exceptions\TemporaryFileException;
 use Jackardios\ImageDimensions\Exceptions\UrlAccessException;
+use Jackardios\ImageDimensions\Support\SvgDimensionsExtractor;
 use League\Flysystem\Local\LocalFilesystemAdapter;
 use Throwable;
 
@@ -275,12 +275,12 @@ class ImageDimensionsService
         $extension = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
         $mimeType = mime_content_type($filePath) ?: '';
 
-        // Handle SVG separately
-        if ($extension === 'svg' || str_contains($mimeType, 'svg')) {
-            if ($fileSize > $this->svgMaxFileSize) {
-                throw new InvalidImageException("SVG file is too large (max " . $this->svgMaxFileSize . " bytes)");
-            }
-            return $this->getSvgDimensions($filePath);
+        // Handle SVG (and any other markup) separately. Content that starts
+        // with "<" must never reach getimagesize(): PHP 8.5 parses SVG there
+        // itself (only when the first byte is "<"), ignoring units and
+        // without the entity guard.
+        if ($extension === 'svg' || str_contains($mimeType, 'svg') || $this->startsWithMarkup($filePath)) {
+            return $this->getLimitedSvgDimensions($filePath, $fileSize);
         }
 
         $size = @getimagesize($filePath);
@@ -292,6 +292,26 @@ class ImageDimensionsService
             'width' => (int) $size[0],
             'height' => (int) $size[1]
         ];
+    }
+
+    /**
+     * @return array{width: int, height: int}
+     * @throws InvalidImageException
+     */
+    private function getLimitedSvgDimensions(string $filePath, int $fileSize): array
+    {
+        if ($fileSize > $this->svgMaxFileSize) {
+            throw new InvalidImageException("SVG file is too large (max " . $this->svgMaxFileSize . " bytes)");
+        }
+
+        return $this->getSvgDimensions($filePath);
+    }
+
+    private function startsWithMarkup(string $filePath): bool
+    {
+        $head = @file_get_contents($filePath, false, null, 0, 1024);
+
+        return $head !== false && SvgDimensionsExtractor::startsWithMarkup($head);
     }
 
     /**
@@ -308,53 +328,15 @@ class ImageDimensionsService
             throw InvalidImageException::forPath($filePath);
         }
 
-        $previousUseInternalErrors = libxml_use_internal_errors(true);
-
-        try {
-            $doc = new DOMDocument();
-            $content = $this->sanitizeSvgContent($content);
-
-            // No LIBXML_NOENT: entities must never be substituted. External
-            // entity loading is already off by default since PHP 8.0.
-            if (!$doc->loadXML($content, LIBXML_NONET)) {
-                $errors = libxml_get_errors();
-                $errorMessage = !empty($errors) ? $errors[0]->message : "Invalid XML content";
-                throw InvalidImageException::forPath($filePath, $errorMessage);
-            }
-
-            $svg = $doc->documentElement;
-            if (!$svg || $svg->tagName !== 'svg') {
-                throw new InvalidImageException("Invalid SVG file: {$filePath}");
-            }
-
-            $width = $this->parseSvgDimension($svg->getAttribute('width'));
-            $height = $this->parseSvgDimension($svg->getAttribute('height'));
-
-            // Try viewBox if dimensions are not set or invalid
-            if (($width === null || $height === null) && $svg->hasAttribute('viewBox')) {
-                $viewBox = preg_split('/[\s,]+/', trim($svg->getAttribute('viewBox')));
-                if (count($viewBox) === 4) {
-                    $viewBoxWidth = abs((float) $viewBox[2] - (float) $viewBox[0]);
-                    $viewBoxHeight = abs((float) $viewBox[3] - (float) $viewBox[1]);
-
-                    $width = $width ?? (int) ceil($viewBoxWidth);
-                    $height = $height ?? (int) ceil($viewBoxHeight);
-                }
-            }
-
-            if ($width === null || $height === null || $width <= 0 || $height <= 0) {
-                throw new InvalidImageException("Could not determine SVG dimensions: {$filePath}");
-            }
-
-            return ['width' => $width, 'height' => $height];
-        } finally {
-            libxml_clear_errors();
-            libxml_use_internal_errors($previousUseInternalErrors);
-        }
+        return (new SvgDimensionsExtractor)->extract($content, $filePath);
     }
 
     /**
      * Sanitize SVG content to remove potentially dangerous elements
+     *
+     * @deprecated No longer used: SVG markup is parsed without substituting
+     *             entities and only the root geometry is read. Will be
+     *             removed in 2.0.
      */
     protected function sanitizeSvgContent(string $content): string
     {
@@ -372,6 +354,10 @@ class ImageDimensionsService
 
     /**
      * Parse SVG dimension value.
+     *
+     * @deprecated No longer used: SVG lengths are parsed by an internal
+     *             extractor that also understands absolute units. Will be
+     *             removed in 2.0.
      *
      * @param string $value
      * @return int|null
@@ -488,7 +474,9 @@ class ImageDimensionsService
      */
     protected function getCacheKey(string $type, string $identifier, ?int $modifiedTime = null): string
     {
-        $key = "image_dimensions:{$type}:" . md5($identifier);
+        // Versioned so that dimensions cached by 1.0 (with its SVG bugs)
+        // are not served after an upgrade.
+        $key = "image_dimensions:v1.1:{$type}:" . md5($identifier);
         if ($modifiedTime !== null) {
             $key .= ":{$modifiedTime}";
         }

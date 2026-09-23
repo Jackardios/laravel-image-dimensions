@@ -73,7 +73,7 @@ class ImageDimensionsIntegrationTest extends TestCase
     public function it_works_with_different_cache_stores(): void
     {
         $path = $this->createImage('test.png', 800, 600);
-        $key = 'image_dimensions:local:'.md5(realpath($path)).':'.filemtime($path);
+        $key = 'image_dimensions:v1.1:local:'.md5(realpath($path)).':'.filemtime($path);
 
         foreach (['array', 'file'] as $store) {
             config(['cache.default' => $store]);
@@ -89,7 +89,7 @@ class ImageDimensionsIntegrationTest extends TestCase
     {
         config(['cache.default' => 'array']);
         $path = $this->createImage('test.png', 800, 600);
-        $key = 'image_dimensions:local:'.md5(realpath($path)).':'.filemtime($path);
+        $key = 'image_dimensions:v1.1:local:'.md5(realpath($path)).':'.filemtime($path);
         Cache::put($key, ['width' => 1, 'height' => 1], 60);
 
         $this->assertSame(['width' => 1, 'height' => 1], ImageDimensions::fromLocal($path));
