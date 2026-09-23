@@ -309,13 +309,14 @@ class ImageDimensionsService
         }
 
         $previousUseInternalErrors = libxml_use_internal_errors(true);
-        $previousEntityLoader = libxml_disable_entity_loader(true);
 
         try {
             $doc = new DOMDocument();
             $content = $this->sanitizeSvgContent($content);
 
-            if (!$doc->loadXML($content, LIBXML_NONET | LIBXML_NOENT)) {
+            // No LIBXML_NOENT: entities must never be substituted. External
+            // entity loading is already off by default since PHP 8.0.
+            if (!$doc->loadXML($content, LIBXML_NONET)) {
                 $errors = libxml_get_errors();
                 $errorMessage = !empty($errors) ? $errors[0]->message : "Invalid XML content";
                 throw InvalidImageException::forPath($filePath, $errorMessage);
@@ -349,7 +350,6 @@ class ImageDimensionsService
         } finally {
             libxml_clear_errors();
             libxml_use_internal_errors($previousUseInternalErrors);
-            libxml_disable_entity_loader($previousEntityLoader);
         }
     }
 
