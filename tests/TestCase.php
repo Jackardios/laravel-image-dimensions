@@ -238,16 +238,16 @@ abstract class TestCase extends Orchestra
         $directory = $this->tempPath.DIRECTORY_SEPARATOR.$name;
         mkdir($directory, 0555);
 
-        $probe = @tempnam($directory, 'probe');
-        // tempnam() falls back to the system temp directory when it cannot
-        // write to the one it was given.
-        if ($probe !== false && dirname($probe) === $directory) {
-            @unlink($probe);
+        // Probed as TemporaryFile creates its files. Root ignores the mode,
+        // and Windows turns it into a read-only attribute that does not stop
+        // files being created (tempnam() would fall back to the system temp
+        // directory there, and so look like it had been stopped).
+        $probe = $directory.DIRECTORY_SEPARATOR.'probe';
+        $handle = @fopen($probe, 'xb');
+        if ($handle !== false) {
+            fclose($handle);
+            unlink($probe);
             $this->markTestSkipped('Directory permissions are not enforced in this environment.');
-        }
-
-        if ($probe !== false) {
-            @unlink($probe);
         }
 
         return $directory;
