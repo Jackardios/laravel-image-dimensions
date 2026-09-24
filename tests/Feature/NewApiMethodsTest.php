@@ -57,6 +57,43 @@ class NewApiMethodsTest extends TestCase
         fclose($stream);
     }
 
+    #[Test]
+    public function it_reads_a_seekable_stream_from_its_start(): void
+    {
+        $stream = fopen('php://temp', 'r+b');
+        fwrite($stream, $this->imageBytes(30, 90));
+        fseek($stream, 10);
+
+        $this->assertDimensions(30, 90, $this->service->fromStream($stream));
+        $this->assertSame(10, ftell($stream), 'The position must be restored.');
+    }
+
+    #[Test]
+    public function it_restores_the_position_of_a_stream_that_is_no_image(): void
+    {
+        $stream = fopen('php://temp', 'r+b');
+        fwrite($stream, str_repeat('J', 1000));
+        fseek($stream, 10);
+
+        $this->assertNull($this->service->tryFromStream($stream));
+        $this->assertSame(10, ftell($stream));
+    }
+
+    #[Test]
+    public function it_reads_a_stream_that_cannot_seek_from_where_it_is(): void
+    {
+        $pair = stream_socket_pair(PHP_OS_FAMILY === 'Windows' ? STREAM_PF_INET : STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+        $this->assertIsArray($pair);
+        [$reader, $writer] = $pair;
+
+        fwrite($writer, 'skip'.$this->imageBytes(30, 90));
+        fclose($writer);
+        $this->assertSame('skip', fread($reader, 4));
+        $this->assertFalse(stream_get_meta_data($reader)['seekable']);
+
+        $this->assertDimensions(30, 90, $this->service->fromStream($reader));
+    }
+
     // --- fromUploadedFile ---
 
     #[Test]

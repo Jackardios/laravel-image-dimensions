@@ -52,6 +52,9 @@ interface ImageDimensions
     /**
      * Get image dimensions from an open, readable stream resource.
      *
+     * A seekable stream is read from its start, whatever its position, and
+     * left at the position it had. Any other stream is read from where it is.
+     *
      * @param  resource  $stream
      *
      * @throws TemporaryFileException

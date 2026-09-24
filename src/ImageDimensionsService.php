@@ -266,27 +266,55 @@ class ImageDimensionsService implements ImageDimensionsContract
             throw new InvalidImageException('A readable stream resource is required.');
         }
 
-        $temp = new TemporaryFile($this->tempDir, 'imgdim_stream_');
-        $limit = $this->maxDownloadBytes;
+        // The whole stream is measured, not what is left of it, and the
+        // caller's position is kept. A stream that cannot seek (a pipe, a
+        // socket) is read from where it is.
+        $position = $this->rewindIfSeekable($stream);
 
-        if ($limit > 0) {
-            // Read one byte past the cap so an overflow is detectable.
-            while ($temp->bytesWritten() <= $limit) {
-                if ($temp->appendFromStream($stream, $limit + 1 - $temp->bytesWritten()) === 0) {
-                    break;
+        try {
+            $temp = new TemporaryFile($this->tempDir, 'imgdim_stream_');
+            $limit = $this->maxDownloadBytes;
+
+            if ($limit > 0) {
+                // Read one byte past the cap so an overflow is detectable.
+                while ($temp->bytesWritten() <= $limit) {
+                    if ($temp->appendFromStream($stream, $limit + 1 - $temp->bytesWritten()) === 0) {
+                        break;
+                    }
+                }
+
+                if ($temp->bytesWritten() > $limit) {
+                    throw FileTooLargeException::forDownload($limit);
+                }
+            } else {
+                while ($temp->appendFromStream($stream, 1048576) > 0) {
+                    // keep reading until the stream is exhausted
                 }
             }
 
-            if ($temp->bytesWritten() > $limit) {
-                throw FileTooLargeException::forDownload($limit);
-            }
-        } else {
-            while ($temp->appendFromStream($stream, 1048576) > 0) {
-                // keep reading until the stream is exhausted
+            return Dimensions::fromArray($this->analyzeFile($temp->path(), '(stream)'));
+        } finally {
+            if ($position !== null) {
+                @fseek($stream, $position);
             }
         }
+    }
 
-        return Dimensions::fromArray($this->analyzeFile($temp->path(), '(stream)'));
+    /**
+     * Move a seekable stream to its start.
+     *
+     * @param  resource  $stream
+     * @return int|null The position it had, or null if it did not move.
+     */
+    private function rewindIfSeekable($stream): ?int
+    {
+        if (! stream_get_meta_data($stream)['seekable']) {
+            return null;
+        }
+
+        $position = @ftell($stream);
+
+        return $position !== false && @fseek($stream, 0) === 0 ? $position : null;
     }
 
     /**
