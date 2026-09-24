@@ -302,12 +302,11 @@ class ImageDimensionsServiceTest extends TestCase
         config(['image-dimensions.enable_cache' => true]);
 
         $path = $this->tempPath.'/test.png';
-        $cacheKey = 'image_dimensions:v2:local:'.md5(realpath($path)).':'.filemtime($path);
 
         // A cached entry is returned without looking at the file.
         Cache::shouldReceive('get')
             ->once()
-            ->with($cacheKey)
+            ->with(\Mockery::pattern('/^image_dimensions:v2:local:[0-9a-f]{32}$/'))
             ->andReturn(['width' => 11, 'height' => 22]);
 
         $result = $this->service->fromLocal($path);

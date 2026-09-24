@@ -111,17 +111,16 @@ class ImageDimensionsIntegrationTest extends TestCase
     public function it_works_with_different_cache_drivers(): void
     {
         $path = $this->tempPath.'/test.png';
-        $cacheKey = 'image_dimensions:v2:local:'.md5(realpath($path)).':'.filemtime($path);
 
-        Config::set('cache.default', 'array');
-        Cache::flush();
-        $this->assertDimensions(800, 600, ImageDimensions::fromLocal($path));
-        $this->assertTrue(Cache::has($cacheKey));
+        foreach (['array', 'file'] as $store) {
+            Config::set('cache.default', $store);
+            Cache::flush();
+            $keys = $this->recordCacheWrites();
 
-        Config::set('cache.default', 'file');
-        Cache::flush();
-        $this->assertDimensions(800, 600, ImageDimensions::fromLocal($path));
-        $this->assertTrue(Cache::has($cacheKey));
+            $this->assertDimensions(800, 600, ImageDimensions::fromLocal($path));
+            $this->assertCount(1, $keys, "One entry written to the {$store} store.");
+            $this->assertSame(['width' => 800, 'height' => 600], Cache::get($keys[0]));
+        }
     }
 
     #[Test]

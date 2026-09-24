@@ -109,8 +109,18 @@ class ImageDimensionsService implements ImageDimensionsContract
             throw new InvalidImageException("File is not readable: {$path}");
         }
 
-        $modifiedTime = @filemtime($realPath);
-        $cacheKey = $this->getCacheKey('local', $realPath, $modifiedTime === false ? null : $modifiedTime);
+        // Any rewrite changes one of these, even one within the same second
+        // or one that restores the modification time (cp -p, an atomic
+        // rename): the ctime or the inode then differs.
+        $stat = @stat($realPath);
+        if ($stat === false) {
+            // Removed since the checks above.
+            throw FileNotFoundException::forLocal($path);
+        }
+
+        $cacheKey = $this->getCacheKey('local', [
+            $realPath, $stat['size'], $stat['mtime'], $stat['ctime'], $stat['ino'],
+        ]);
 
         return $this->getCachedOrCompute($cacheKey, function () use ($realPath) {
             return $this->analyzeFile($realPath, $realPath);
@@ -177,34 +187,34 @@ class ImageDimensionsService implements ImageDimensionsContract
             throw new InvalidImageException("Storage disk '{$diskName}' does not exist");
         }
 
-        try {
-            // Also rejects a path that would leave the disk's root.
-            $exists = $disk->exists($path);
-        } catch (PathTraversalDetected $e) {
-            throw new InvalidImageException("Invalid storage path: {$path}", 0, $e);
-        } catch (Throwable $e) {
-            throw StorageAccessException::couldNotAccess($path, $e);
-        }
-
-        if (! $exists) {
-            throw FileNotFoundException::forStorage($diskName, $path);
-        }
-
         // Fast path: a local disk is just a filesystem path, so reuse fromLocal
-        // (which also enables its extension-aware format detection and caching).
+        // (and its stat-based cache key). The existence check comes first: it
+        // rejects a path that would leave the disk's root.
         if (method_exists($disk, 'getAdapter') && $disk->getAdapter() instanceof LocalFilesystemAdapter) {
+            if (! $this->storageFileExists($disk, $path)) {
+                throw FileNotFoundException::forStorage($diskName, $path);
+            }
+
             return $this->fromLocal($disk->path($path));
         }
 
-        // The modification time invalidates the cache when the file changes;
-        // some drivers cannot report it, in which case the key omits it.
+        // The modification time invalidates the cache when the file changes,
+        // and proves that the file exists: a cache hit then costs one remote
+        // call instead of two. Some drivers cannot report it; the key then
+        // omits it.
         try {
             $modifiedTime = $disk->lastModified($path);
+        } catch (PathTraversalDetected $e) {
+            throw new InvalidImageException("Invalid storage path: {$path}", 0, $e);
         } catch (Throwable) {
+            if (! $this->storageFileExists($disk, $path)) {
+                throw FileNotFoundException::forStorage($diskName, $path);
+            }
+
             $modifiedTime = null;
         }
 
-        $cacheKey = $this->getCacheKey('storage', "{$diskName}:{$path}", $modifiedTime);
+        $cacheKey = $this->getCacheKey('storage', [$diskName, $path, $modifiedTime]);
 
         return $this->getCachedOrCompute($cacheKey, function () use ($disk, $path) {
             return $this->getDimensionsFromStorage($disk, $path);
@@ -670,6 +680,23 @@ class ImageDimensionsService implements ImageDimensionsContract
     }
 
     /**
+     * @param  Filesystem  $disk
+     *
+     * @throws InvalidImageException
+     * @throws StorageAccessException
+     */
+    private function storageFileExists($disk, string $path): bool
+    {
+        try {
+            return $disk->exists($path);
+        } catch (PathTraversalDetected $e) {
+            throw new InvalidImageException("Invalid storage path: {$path}", 0, $e);
+        } catch (Throwable $e) {
+            throw StorageAccessException::couldNotAccess($path, $e);
+        }
+    }
+
+    /**
      * @throws InvalidImageException
      */
     private function assertValidPath(string $path): void
@@ -761,15 +788,14 @@ class ImageDimensionsService implements ImageDimensionsContract
      *
      * The `v2` segment invalidates entries written by v1, which could hold
      * incorrect dimensions from the old viewBox miscalculation.
+     *
+     * @param  string|list<mixed>  $identity  What identifies the source's
+     *                                        current contents (URL, or path plus file metadata).
      */
-    protected function getCacheKey(string $type, string $identifier, ?int $modifiedTime = null): string
+    protected function getCacheKey(string $type, string|array $identity): string
     {
-        $key = "image_dimensions:v2:{$type}:".md5($identifier);
-        if ($modifiedTime !== null) {
-            $key .= ":{$modifiedTime}";
-        }
-
-        return $key;
+        // JSON keeps the parts apart: "a:b" + "c" and "a" + "b:c" differ.
+        return "image_dimensions:v2:{$type}:".md5(is_string($identity) ? $identity : (string) json_encode($identity));
     }
 
     /**

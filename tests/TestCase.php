@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace Jackardios\ImageDimensions\Tests;
 
+use ArrayObject;
 use ErrorException;
+use Illuminate\Cache\Events\KeyWritten;
 use Illuminate\Filesystem\FilesystemAdapter as IlluminateFilesystemAdapter;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Jackardios\ImageDimensions\Dimensions;
@@ -119,6 +122,21 @@ abstract class TestCase extends Orchestra
         $this->assertInstanceOf(Dimensions::class, $actual);
         $this->assertSame($width, $actual->width, 'Unexpected width.');
         $this->assertSame($height, $actual->height, 'Unexpected height.');
+    }
+
+    /**
+     * Collect the keys written to the cache from now on.
+     *
+     * @return ArrayObject<int, string>
+     */
+    protected function recordCacheWrites(): ArrayObject
+    {
+        $keys = new ArrayObject;
+        Event::listen(KeyWritten::class, static function (KeyWritten $event) use ($keys): void {
+            $keys[] = $event->key;
+        });
+
+        return $keys;
     }
 
     protected function createImage(string $filename, int $width, int $height, string $format = 'png'): string
