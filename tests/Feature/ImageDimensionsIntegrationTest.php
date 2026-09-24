@@ -6,41 +6,24 @@ namespace Jackardios\ImageDimensions\Tests\Feature;
 
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Config;
-use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\ServiceProvider;
-use Jackardios\ImageDimensions\Exceptions\InvalidImageException;
-use Jackardios\ImageDimensions\Exceptions\TemporaryFileException;
+use Jackardios\ImageDimensions\Exceptions\FileNotFoundException;
+use Jackardios\ImageDimensions\Exceptions\FileTooLargeException;
 use Jackardios\ImageDimensions\Facades\ImageDimensions;
-use Jackardios\ImageDimensions\ImageDimensionsService;
 use Jackardios\ImageDimensions\Providers\ImageDimensionsServiceProvider;
 use Jackardios\ImageDimensions\Tests\TestCase;
 use PHPUnit\Framework\Attributes\Test;
-use ReflectionClass;
 
+/**
+ * The package inside a Laravel application: the facade, the published
+ * config, local disks and the cache stores.
+ */
 class ImageDimensionsIntegrationTest extends TestCase
 {
-    protected function setUp(): void
-    {
-        parent::setUp();
-
-        $this->createImage('test.png', 800, 600);
-        $this->createSvg('test.svg', ['width' => 1920, 'height' => 1080]);
-    }
-
     #[Test]
-    public function it_registers_the_service_provider_and_facade(): void
+    public function the_facade_reads_dimensions(): void
     {
-        $this->assertInstanceOf(ImageDimensionsService::class, $this->app->make('image-dimensions'));
-        $this->assertInstanceOf(ImageDimensionsService::class, ImageDimensions::getFacadeRoot());
-    }
-
-    #[Test]
-    public function it_correctly_uses_the_facade_to_get_dimensions(): void
-    {
-        $result = ImageDimensions::fromLocal($this->tempPath.'/test.png');
-
-        $this->assertDimensions(800, 600, $result);
+        $this->assertDimensions(800, 600, ImageDimensions::fromLocal($this->createImage('image.png', 800, 600)));
     }
 
     #[Test]
@@ -57,61 +40,47 @@ class ImageDimensionsIntegrationTest extends TestCase
     }
 
     #[Test]
-    public function it_uses_values_from_the_configuration(): void
+    public function the_container_builds_the_service_from_the_application_config(): void
     {
-        Config::set('image-dimensions.remote_read_bytes', 16384);
         Config::set('image-dimensions.enable_cache', false);
+        Config::set('image-dimensions.max_download_bytes', 10000);
+        Config::set('image-dimensions.remote_read_bytes', 8192);
+        $keys = $this->recordCacheWrites();
 
-        $service = new ImageDimensionsService;
-        $reflection = new ReflectionClass($service);
+        $this->assertDimensions(80, 60, ImageDimensions::fromLocal($this->createImage('image.png', 80, 60)));
+        $this->assertCount(0, $keys, 'enable_cache is read from the config.');
 
-        $remoteReadBytesProp = $reflection->getProperty('remoteReadBytes');
-        $this->assertEquals(16384, $remoteReadBytesProp->getValue($service));
-
-        $enableCacheProp = $reflection->getProperty('enableCache');
-        $this->assertFalse($enableCacheProp->getValue($service));
+        $this->expectException(FileTooLargeException::class);
+        $this->expectExceptionMessage('max 10000 bytes');
+        ImageDimensions::fromContents(str_repeat('x', 10001));
     }
 
     #[Test]
-    public function it_gets_dimensions_from_a_local_laravel_storage_disk(): void
+    public function it_reads_a_file_on_a_local_disk(): void
     {
-        Storage::fake('images');
-        Storage::disk('images')->put('test.png', file_get_contents($this->tempPath.'/test.png'));
+        Config::set('filesystems.disks.images', ['driver' => 'local', 'root' => $this->tempPath.'/disk']);
+        $this->app['filesystem']->disk('images')->put('photos/image.png', $this->imageBytes(800, 600));
 
-        $result = ImageDimensions::fromStorage('images', 'test.png');
-
-        $this->assertDimensions(800, 600, $result);
+        $this->assertDimensions(800, 600, ImageDimensions::fromStorage('images', 'photos/image.png'));
     }
 
     #[Test]
-    public function it_gets_dimensions_from_a_remote_laravel_storage_disk(): void
+    public function a_missing_file_on_a_local_disk_is_not_found(): void
     {
-        Storage::fake('s3');
-        Storage::disk('s3')->put('images/test.svg', file_get_contents($this->tempPath.'/test.svg'));
+        Config::set('filesystems.disks.images', ['driver' => 'local', 'root' => $this->tempPath.'/disk']);
 
-        $result = ImageDimensions::fromStorage('s3', 'images/test.svg');
-
-        $this->assertDimensions(1920, 1080, $result);
+        $this->expectException(FileNotFoundException::class);
+        $this->expectExceptionMessage("File not found on disk 'images': missing.png");
+        ImageDimensions::fromStorage('images', 'missing.png');
     }
 
     #[Test]
-    public function it_throws_exception_if_temp_directory_is_not_writable(): void
+    public function it_works_with_different_cache_stores(): void
     {
-        Config::set('image-dimensions.temp_dir', $this->createReadOnlyDirectory('unwritable'));
-        $service = new ImageDimensionsService;
+        $path = $this->createImage('image.png', 800, 600);
 
-        Http::fake(['http://example.com/image.png' => Http::response('image data')]);
-
-        $this->expectException(TemporaryFileException::class);
-        $this->expectExceptionMessage('Could not create temporary file');
-        $service->fromUrl('http://example.com/image.png');
-    }
-
-    #[Test]
-    public function it_works_with_different_cache_drivers(): void
-    {
-        $path = $this->tempPath.'/test.png';
-
+        // The file store lives in this test's temporary directory (see
+        // TestCase::defineEnvironment()), so flushing it touches nothing else.
         foreach (['array', 'file'] as $store) {
             Config::set('cache.default', $store);
             Cache::flush();
@@ -121,40 +90,5 @@ class ImageDimensionsIntegrationTest extends TestCase
             $this->assertCount(1, $keys, "One entry written to the {$store} store.");
             $this->assertSame(['width' => 800, 'height' => 600], Cache::get($keys[0]));
         }
-    }
-
-    #[Test]
-    public function it_handles_malformed_svg_files(): void
-    {
-        $path = $this->createFile('malformed.svg', '<?xml version="1.0"?><svg><rect>');
-
-        $this->expectException(InvalidImageException::class);
-        ImageDimensions::fromLocal($path);
-    }
-
-    #[Test]
-    public function it_falls_back_to_viewbox_for_svg_with_percentage_dimensions(): void
-    {
-        $path = $this->createFile(
-            'percentage.svg',
-            '<svg width="100%" height="100%" viewBox="0 0 200 150"><rect width="100%" height="100%"/></svg>'
-        );
-
-        $result = ImageDimensions::fromLocal($path);
-
-        $this->assertDimensions(200, 150, $result);
-    }
-
-    #[Test]
-    public function it_handles_various_mime_types_and_extensions_correctly(): void
-    {
-        // Copy the PNG file with the JPG extension
-        $sourcePath = $this->tempPath.'/test.png';
-        $destPath = $this->tempPath.'/image.jpg';
-        copy($sourcePath, $destPath);
-
-        // The library should determine the size by the content, not by the extension
-        $result = ImageDimensions::fromLocal($destPath);
-        $this->assertDimensions(800, 600, $result);
     }
 }

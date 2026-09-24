@@ -76,8 +76,27 @@ class DimensionsTest extends TestCase
     {
         $d = new Dimensions(800, 600);
 
-        $this->expectException(LogicException::class);
-        $d['width'] = 1;
+        try {
+            $d['width'] = 1;
+            $this->fail('Setting an offset must throw.');
+        } catch (LogicException) {
+        }
+
+        try {
+            unset($d['width']);
+            $this->fail('Unsetting an offset must throw.');
+        } catch (LogicException) {
+        }
+
+        $this->assertSame(800, $d['width']);
+    }
+
+    #[Test]
+    public function it_rejects_an_unknown_offset(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage("Unknown dimension offset: 'depth'");
+        (new Dimensions(800, 600))['depth'];
     }
 
     #[Test]

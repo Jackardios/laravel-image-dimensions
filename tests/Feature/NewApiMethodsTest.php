@@ -5,12 +5,14 @@ declare(strict_types=1);
 namespace Jackardios\ImageDimensions\Tests\Feature;
 
 use Illuminate\Http\UploadedFile;
-use Jackardios\ImageDimensions\Dimensions;
+use Illuminate\Support\Facades\Http;
+use Jackardios\ImageDimensions\Exceptions\FileNotFoundException;
 use Jackardios\ImageDimensions\Exceptions\FileTooLargeException;
 use Jackardios\ImageDimensions\Exceptions\InvalidImageException;
 use Jackardios\ImageDimensions\ImageDimensionsService;
 use Jackardios\ImageDimensions\Tests\TestCase;
 use PHPUnit\Framework\Attributes\Test;
+use SplFileInfo;
 
 class NewApiMethodsTest extends TestCase
 {
@@ -117,28 +119,55 @@ class NewApiMethodsTest extends TestCase
         $this->assertDimensions(70, 30, $this->service->fromUploadedFile($uploaded));
     }
 
+    #[Test]
+    public function it_reads_a_file_that_is_no_upload(): void
+    {
+        $this->assertDimensions(12, 34, $this->service->fromUploadedFile(new SplFileInfo($this->createImage('a.png', 12, 34))));
+    }
+
+    #[Test]
+    public function a_missing_upload_is_not_found(): void
+    {
+        $this->expectException(FileNotFoundException::class);
+        $this->service->fromUploadedFile(new SplFileInfo($this->tempPath.'/missing.png'));
+    }
+
     // --- tryFrom* ---
 
     #[Test]
     public function try_variants_return_dimensions_on_success(): void
     {
         $path = $this->createImage('ok.png', 12, 34);
+        $this->useInMemoryDisk('mem')->put('ok.png', $this->imageBytes(12, 34));
+        Http::fake(['https://example.com/ok.png' => Http::response($this->imageBytes(12, 34))]);
+        $stream = fopen($path, 'rb');
 
         $this->assertDimensions(12, 34, $this->service->tryFromLocal($path));
-        $this->assertDimensions(64, 48, $this->service->tryFromContents($this->imageBytes(64, 48)));
+        $this->assertDimensions(12, 34, $this->service->tryFromUrl('https://example.com/ok.png'));
+        $this->assertDimensions(12, 34, $this->service->tryFromStorage('mem', 'ok.png'));
+        $this->assertDimensions(12, 34, $this->service->tryFromContents($this->imageBytes(12, 34)));
+        $this->assertDimensions(12, 34, $this->service->tryFromStream($stream));
+        $this->assertDimensions(12, 34, $this->service->tryFromUploadedFile(new UploadedFile($path, 'ok.png', 'image/png', null, true)));
+
+        fclose($stream);
     }
 
     #[Test]
     public function try_variants_return_null_on_failure(): void
     {
-        $this->assertNull($this->service->tryFromLocal($this->tempPath.'/missing.png'));
-        $this->assertNull($this->service->tryFromContents('not an image'));
-        $this->assertNull($this->service->tryFromStorage('nonexistent-disk', 'x.png'));
+        $path = $this->createFile('garbage.png', 'garbage');
+        $this->useInMemoryDisk('mem')->put('garbage.png', 'garbage');
+        Http::fake(['https://example.com/garbage.png' => Http::response('garbage')]);
+        $stream = fopen($path, 'rb');
 
-        $stream = fopen('php://memory', 'r+');
-        fwrite($stream, 'garbage');
-        rewind($stream);
+        $this->assertNull($this->service->tryFromLocal($this->tempPath.'/missing.png'));
+        $this->assertNull($this->service->tryFromUrl('https://example.com/garbage.png'));
+        $this->assertNull($this->service->tryFromStorage('mem', 'garbage.png'));
+        $this->assertNull($this->service->tryFromStorage('nonexistent-disk', 'x.png'));
+        $this->assertNull($this->service->tryFromContents('not an image'));
         $this->assertNull($this->service->tryFromStream($stream));
+        $this->assertNull($this->service->tryFromUploadedFile(new UploadedFile($path, 'garbage.png', 'image/png', null, true)));
+
         fclose($stream);
     }
 
@@ -151,12 +180,6 @@ class NewApiMethodsTest extends TestCase
         ]);
 
         $this->assertNull($service->tryFromUrl('http://127.0.0.1/secret.png'));
-    }
-
-    #[Test]
-    public function the_new_methods_return_the_dimensions_value_object(): void
-    {
-        $this->assertInstanceOf(Dimensions::class, $this->service->fromContents($this->imageBytes(5, 5)));
     }
 
     /**

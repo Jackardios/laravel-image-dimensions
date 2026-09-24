@@ -76,61 +76,60 @@ class SecureDefaultsTest extends TestCase
     }
 
     /**
-     * Http::fake() short-circuits Guzzle's redirect middleware, so the
-     * allow_redirects option block is never executed by the pipeline tests. Assert
-     * its shape directly — a renamed key or a missing on_redirect callback would
-     * otherwise disable redirect re-validation silently.
+     * The redirect options a fake cannot show: no Referer to the next host,
+     * and a 302 after a POST stays what it was.
      */
     #[Test]
-    public function the_request_options_wire_up_redirect_revalidation(): void
+    public function the_request_options_follow_redirects_strictly(): void
     {
         $service = new ImageDimensionsService([
             'url' => ['max_redirects' => 3],
             'http' => ['timeout' => 15, 'connect_timeout' => 4, 'verify_ssl' => true],
         ]);
 
-        $method = new ReflectionMethod($service, 'requestOptions');
-        /** @var array<string, mixed> $options */
-        $options = $method->invoke($service);
+        $options = $this->requestOptions($service);
 
         $this->assertFalse($options['decode_content'], 'the download cap must count the bytes received');
         $this->assertSame(15, $options['timeout']);
         $this->assertSame(4, $options['connect_timeout']);
         $this->assertTrue($options['verify']);
 
-        $this->assertArrayHasKey('allow_redirects', $options);
         $redirects = $options['allow_redirects'];
-
         $this->assertSame(3, $redirects['max']);
         $this->assertTrue($redirects['strict']);
         $this->assertFalse($redirects['referer']);
         $this->assertSame(['http', 'https'], $redirects['protocols']);
-        $this->assertIsCallable($redirects['on_redirect']);
     }
 
     #[Test]
-    public function the_redirect_callback_rejects_a_hop_into_a_private_network(): void
+    public function certificate_verification_can_be_turned_off(): void
     {
-        $service = new ImageDimensionsService(['url' => ['allow_private_hosts' => false]]);
+        $service = new ImageDimensionsService(['http' => ['verify_ssl' => false]]);
 
-        $method = new ReflectionMethod($service, 'requestOptions');
-        /** @var array<string, mixed> $options */
-        $options = $method->invoke($service);
-        $onRedirect = $options['allow_redirects']['on_redirect'];
-
-        $this->expectException(UrlNotAllowedException::class);
-        $onRedirect(null, null, 'http://169.254.169.254/latest/meta-data/');
+        $this->assertFalse($this->requestOptions($service)['verify']);
     }
 
+    /**
+     * Every hop of a redirect is checked before it is followed.
+     */
     #[Test]
-    public function a_literal_address_is_judged_without_dns(): void
+    public function a_redirect_into_a_private_network_is_not_followed(): void
     {
-        $guard = new UrlGuard(allowPrivateHosts: false, resolver: function () {
-            $this->fail('No DNS lookup expected for a literal address.');
-        });
+        $service = $this->serviceResolvingWith(fn (string $host) => ['93.184.215.14']);
+        Http::fake([
+            'https://example.com/a.png' => Http::response(null, 302, ['Location' => 'http://169.254.169.254/latest/meta-data/']),
+            '*' => Http::response('SECRET'),
+        ]);
 
-        $this->expectException(UrlNotAllowedException::class);
-        $guard->assertAllowed('http://10.0.0.1/x.png');
+        try {
+            $service->fromUrl('https://example.com/a.png');
+            $this->fail('Expected a UrlNotAllowedException.');
+        } catch (UrlNotAllowedException $e) {
+            $this->assertStringContainsString("Host '169.254.169.254'", $e->getMessage());
+        }
+
+        Http::assertSent(fn ($request) => $request->url() === 'https://example.com/a.png');
+        Http::assertNotSent(fn ($request) => str_contains($request->url(), '169.254.169.254'));
     }
 
     /**
@@ -218,6 +217,14 @@ class SecureDefaultsTest extends TestCase
         Http::fake(['https://my_bucket.s3.amazonaws.com/*' => Http::response($this->imageBytes(3, 4))]);
 
         $this->assertDimensions(3, 4, $service->fromUrl('https://my_bucket.s3.amazonaws.com/a.png'));
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function requestOptions(ImageDimensionsService $service): array
+    {
+        return (new ReflectionMethod($service, 'requestOptions'))->invoke($service);
     }
 
     /**

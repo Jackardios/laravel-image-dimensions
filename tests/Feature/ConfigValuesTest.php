@@ -31,6 +31,11 @@ class ConfigValuesTest extends TestCase
             'download cap turned off' => [['max_download_bytes' => '0'], 'maxDownloadBytes', 0],
             'huge download cap' => [['max_download_bytes' => '1e30'], 'maxDownloadBytes', 1000000000000000],
             'empty read size' => [['remote_read_bytes' => ''], 'remoteReadBytes', 131072],
+            'read size below the minimum' => [['remote_read_bytes' => 100], 'remoteReadBytes', 8192],
+            'read size above the maximum' => [['remote_read_bytes' => 10000000], 'remoteReadBytes', 1048576],
+            // The header must fit under the download cap.
+            'download cap below the read size' => [['remote_read_bytes' => 65536, 'max_download_bytes' => 1000], 'maxDownloadBytes', 65536],
+            'negative download cap' => [['max_download_bytes' => -5], 'maxDownloadBytes', 0],
             // An empty value used to turn caching off.
             'empty TTL' => [['cache_ttl' => ''], 'cacheTtl', 3600],
             'TTL of null' => [['cache_ttl' => null], 'cacheTtl', null],

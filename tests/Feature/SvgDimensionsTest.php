@@ -100,6 +100,20 @@ class SvgDimensionsTest extends TestCase
         $this->service->fromLocal($this->createSvg('image.svg', $attributes));
     }
 
+    /**
+     * Scripts and event handlers are neither run nor removed: the extractor
+     * only reads the geometry. Serving an uploaded SVG safely is the
+     * application's job.
+     */
+    #[Test]
+    public function it_reads_an_svg_that_contains_scripts(): void
+    {
+        $path = $this->createSvg('script.svg', ['width' => 100, 'height' => 50], '<script>alert("XSS")</script><rect onclick="alert(1)" width="100" height="50"/>');
+
+        $this->assertDimensions(100, 50, $this->service->fromLocal($path));
+        $this->assertStringContainsString('<script>', (string) file_get_contents($path));
+    }
+
     #[Test]
     public function it_reports_the_xml_parser_error(): void
     {

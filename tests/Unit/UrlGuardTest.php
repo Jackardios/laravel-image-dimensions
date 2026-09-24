@@ -34,6 +34,10 @@ class UrlGuardTest extends TestCase
             'ipv4 unspecified' => ['0.0.0.0'],
             'ipv4 cgnat' => ['100.64.0.1'],
             'ipv4 test-net' => ['192.0.2.1'],
+            'ipv4 test-net-2' => ['198.51.100.1'],
+            'ipv4 test-net-3' => ['203.0.113.1'],
+            'ipv4 ietf protocol assignments' => ['192.0.0.1'],
+            'ipv4 reserved' => ['240.0.0.1'],
             'ipv4 benchmark' => ['198.18.0.1'],
             'ipv6 loopback' => ['::1'],
             'ipv6 ula' => ['fc00::1'],
@@ -101,31 +105,55 @@ class UrlGuardTest extends TestCase
         ];
     }
 
-    #[Test]
-    public function it_rejects_a_url_that_resolves_to_a_private_address(): void
+    /**
+     * @return array<string, array{0: string, 1: bool}>
+     */
+    public static function addressUrlProvider(): array
     {
-        $guard = new UrlGuard(allowPrivateHosts: false);
-
-        $this->expectException(UrlNotAllowedException::class);
-        $guard->assertAllowed('http://127.0.0.1/admin');
+        return [
+            'ipv4 loopback' => ['http://127.0.0.1/admin', false],
+            'metadata endpoint' => ['http://169.254.169.254/latest/meta-data/', false],
+            'ipv4 public' => ['https://8.8.8.8/image.png', true],
+            'ipv6 loopback' => ['http://[::1]/admin', false],
+            'ipv4-mapped loopback' => ['http://[::ffff:127.0.0.1]/admin', false],
+            'ipv6 public' => ['http://[2606:4700:4700::1111]/image.png', true],
+        ];
     }
 
+    /**
+     * An address in the URL is judged as it is, without DNS.
+     */
     #[Test]
-    public function it_rejects_the_aws_metadata_endpoint(): void
+    #[DataProvider('addressUrlProvider')]
+    public function it_judges_an_address_in_the_url(string $url, bool $allowed): void
     {
-        $guard = new UrlGuard(allowPrivateHosts: false);
+        $guard = new UrlGuard(allowPrivateHosts: false, resolver: function () {
+            $this->fail('No DNS lookup expected for an address.');
+        });
 
-        $this->expectException(UrlNotAllowedException::class);
-        $guard->assertAllowed('http://169.254.169.254/latest/meta-data/');
-    }
+        if (! $allowed) {
+            $this->expectException(UrlNotAllowedException::class);
+            $this->expectExceptionMessage('resolves to a private or reserved address');
+        }
 
-    #[Test]
-    public function it_allows_a_url_that_resolves_to_a_public_address(): void
-    {
-        $guard = new UrlGuard(allowPrivateHosts: false);
-
-        $guard->assertAllowed('https://8.8.8.8/image.png');
+        $guard->assertAllowed($url);
         $this->addToAssertionCount(1);
+    }
+
+    #[Test]
+    public function an_allowlist_entry_may_be_an_ipv6_address(): void
+    {
+        foreach (['2606:4700:4700::1111', '[2606:4700:4700::1111]'] as $entry) {
+            $guard = new UrlGuard(allowPrivateHosts: false, allowedHosts: [$entry]);
+            $guard->assertAllowed('http://[2606:4700:4700::1111]/image.png');
+
+            try {
+                $guard->assertAllowed('http://[2606:4700:4700::1112]/image.png');
+                $this->fail("{$entry} must admit only itself.");
+            } catch (UrlNotAllowedException $e) {
+                $this->assertStringContainsString('is not in the configured allowlist', $e->getMessage());
+            }
+        }
     }
 
     #[Test]

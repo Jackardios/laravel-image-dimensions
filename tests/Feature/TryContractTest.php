@@ -4,15 +4,20 @@ declare(strict_types=1);
 
 namespace Jackardios\ImageDimensions\Tests\Feature;
 
+use Illuminate\Filesystem\FilesystemAdapter;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Storage;
 use Jackardios\ImageDimensions\Exceptions\FileNotFoundException;
 use Jackardios\ImageDimensions\Exceptions\InvalidImageException;
 use Jackardios\ImageDimensions\Exceptions\StorageAccessException;
 use Jackardios\ImageDimensions\ImageDimensionsService;
 use Jackardios\ImageDimensions\Tests\TestCase;
+use League\Flysystem\Config;
 use League\Flysystem\FileAttributes;
+use League\Flysystem\Filesystem;
 use League\Flysystem\InMemory\InMemoryFilesystemAdapter;
 use League\Flysystem\UnableToCheckFileExistence;
+use League\Flysystem\UnableToReadFile;
 use League\Flysystem\UnableToRetrieveMetadata;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Test;
@@ -96,6 +101,56 @@ class TryContractTest extends TestCase
         } catch (StorageAccessException $e) {
             $this->assertInstanceOf(UnableToCheckFileExistence::class, $e->getPrevious());
         }
+    }
+
+    /**
+     * @return array<string, array{0: bool}>
+     */
+    public static function throwingDiskProvider(): array
+    {
+        return ['disk that returns null' => [false], 'disk that throws' => [true]];
+    }
+
+    #[Test]
+    #[DataProvider('throwingDiskProvider')]
+    public function a_file_that_cannot_be_read_is_a_storage_error(bool $throws): void
+    {
+        $adapter = new class extends InMemoryFilesystemAdapter
+        {
+            public function readStream(string $path)
+            {
+                throw UnableToReadFile::fromLocation($path, 'Access denied');
+            }
+        };
+        $adapter->write('a.png', $this->imageBytes(1, 1), new Config);
+        // Laravel disks swallow the driver's exception unless 'throw' is set.
+        Storage::set('flaky', new FilesystemAdapter(new Filesystem($adapter), $adapter, ['throw' => $throws]));
+
+        $this->assertNull($this->service->tryFromStorage('flaky', 'a.png'));
+
+        try {
+            $this->service->fromStorage('flaky', 'a.png');
+            $this->fail('Expected a StorageAccessException.');
+        } catch (StorageAccessException $e) {
+            $this->assertSame('Could not read stream from storage file: a.png', $e->getMessage());
+            $throws
+                ? $this->assertInstanceOf(UnableToReadFile::class, $e->getPrevious())
+                : $this->assertNull($e->getPrevious());
+        }
+    }
+
+    /**
+     * Only failures of the source become null: a broken application, say a
+     * misconfigured filesystem driver, is not hidden.
+     */
+    #[Test]
+    public function a_failure_outside_the_package_is_not_hidden(): void
+    {
+        Storage::shouldReceive('disk')->andThrow(new RuntimeException('Driver [s4] is not supported.'));
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Driver [s4] is not supported.');
+        $this->service->tryFromStorage('any', 'a.png');
     }
 
     #[Test]

@@ -162,6 +162,19 @@ abstract class TestCase extends Orchestra
     }
 
     /**
+     * A JPEG whose frame header comes after $segments application segments
+     * of 64 KB each, so its dimensions are not in the first bytes.
+     */
+    protected function jpegWithLargeMetadata(int $width, int $height, int $segments = 4): string
+    {
+        $jpeg = $this->imageBytes($width, $height, 'jpg');
+        $segment = "\xFF\xE9".pack('n', 65535).str_repeat("\0", 65533);
+
+        // After the SOI marker.
+        return substr($jpeg, 0, 2).str_repeat($segment, $segments).substr($jpeg, 2);
+    }
+
+    /**
      * @param  array<string, string|int>  $attributes  Rendered onto the root <svg> element.
      */
     protected function createSvg(string $filename, array $attributes, string $content = ''): string

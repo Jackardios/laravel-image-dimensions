@@ -5,14 +5,17 @@ declare(strict_types=1);
 namespace Jackardios\ImageDimensions\Tests\Feature;
 
 use GuzzleHttp\Psr7\Utils;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\StrayRequestException;
 use Illuminate\Support\Facades\Http;
 use Jackardios\ImageDimensions\Exceptions\FileTooLargeException;
 use Jackardios\ImageDimensions\Exceptions\InvalidImageException;
+use Jackardios\ImageDimensions\Exceptions\TemporaryFileException;
 use Jackardios\ImageDimensions\Exceptions\UrlAccessException;
 use Jackardios\ImageDimensions\Exceptions\UrlNotAllowedException;
 use Jackardios\ImageDimensions\ImageDimensionsService;
 use Jackardios\ImageDimensions\Tests\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Test;
 
 class RemotePipelineTest extends TestCase
@@ -63,19 +66,51 @@ class RemotePipelineTest extends TestCase
         $this->assertDimensions(120, 80, $this->service->fromUrl($url));
     }
 
-    #[Test]
-    public function it_only_issues_a_single_request_even_when_it_reads_the_whole_body(): void
+    /**
+     * The first remote_read_bytes are not enough for either image, so the
+     * rest of the body is read, from the same response.
+     *
+     * @return array<string, array{0: string, 1: int, 2: int}>
+     */
+    public static function bodyPastTheHeaderProvider(): array
     {
-        // remote_read_bytes is tiny, so the header probe is insufficient and the
-        // pipeline must continue reading the SAME stream (no second request).
+        return [
+            'svg' => ['svg', 321, 123],
+            'jpeg with large metadata' => ['jpeg', 40, 30],
+        ];
+    }
+
+    #[Test]
+    #[DataProvider('bodyPastTheHeaderProvider')]
+    public function it_reads_the_body_past_the_header_in_a_single_request(string $kind, int $width, int $height): void
+    {
         $service = $this->makeService(['remote_read_bytes' => 8192]);
+        $url = "https://example.com/late.{$kind}";
+        Http::fake([$url => Http::response(Utils::streamFor($this->bodyPastTheHeader($kind)), 200)]);
 
-        $url = 'https://example.com/big.png';
-        Http::fake([$url => Http::response(Utils::streamFor($this->imageBytes(1000, 1000)), 200)]);
-
-        $service->fromUrl($url);
-
+        $this->assertDimensions($width, $height, $service->fromUrl($url));
         Http::assertSentCount(1);
+    }
+
+    /**
+     * Without a download cap the whole body is read, however long.
+     */
+    #[Test]
+    #[DataProvider('bodyPastTheHeaderProvider')]
+    public function without_a_download_cap_it_reads_the_whole_body(string $kind, int $width, int $height): void
+    {
+        $service = $this->makeService(['remote_read_bytes' => 8192, 'max_download_bytes' => 0, 'svg' => ['max_file_size' => 0]]);
+        $url = "https://example.com/late.{$kind}";
+        Http::fake([$url => Http::response(Utils::streamFor($this->bodyPastTheHeader($kind, 3000000)), 200)]);
+
+        $this->assertDimensions($width, $height, $service->fromUrl($url));
+    }
+
+    private function bodyPastTheHeader(string $kind, int $bytes = 50000): string
+    {
+        return $kind === 'svg'
+            ? '<svg xmlns="http://www.w3.org/2000/svg" width="321" height="123"><!--'.str_repeat('x', $bytes).'--></svg>'
+            : $this->jpegWithLargeMetadata(40, 30, intdiv($bytes, 65537) + 1);
     }
 
     /**
@@ -121,8 +156,75 @@ class RemotePipelineTest extends TestCase
         $url = 'https://example.com/missing.png';
         Http::fake([$url => Http::response(null, 404)]);
 
-        $this->expectException(UrlAccessException::class);
-        $this->service->fromUrl($url);
+        try {
+            $this->service->fromUrl($url);
+            $this->fail('Expected a UrlAccessException.');
+        } catch (UrlAccessException $e) {
+            // Not a subclass such as UrlNotAllowedException.
+            $this->assertSame(UrlAccessException::class, $e::class);
+            $this->assertSame("Could not open URL: {$url} (HTTP 404)", $e->getMessage());
+        }
+    }
+
+    #[Test]
+    public function a_failed_connection_is_a_url_access_error_with_its_cause(): void
+    {
+        $url = 'https://example.com/timeout.jpg';
+        Http::fake([$url => fn () => throw new ConnectionException('Timeout was reached')]);
+
+        try {
+            $this->service->fromUrl($url);
+            $this->fail('Expected a UrlAccessException.');
+        } catch (UrlAccessException $e) {
+            $this->assertSame("Could not open URL: {$url}", $e->getMessage());
+            $this->assertInstanceOf(ConnectionException::class, $e->getPrevious());
+        }
+    }
+
+    #[Test]
+    public function a_redirect_loop_is_a_url_access_error(): void
+    {
+        $url = 'https://example.com/loop';
+        $requests = 0;
+        Http::fake([$url => function () use ($url, &$requests) {
+            $requests++;
+
+            return Http::response(null, 302, ['Location' => $url]);
+        }]);
+
+        try {
+            $this->makeService(['url' => ['allow_private_hosts' => true, 'max_redirects' => 3]])->fromUrl($url);
+            $this->fail('Expected a UrlAccessException.');
+        } catch (UrlAccessException $e) {
+            $this->assertSame("Could not open URL: {$url}", $e->getMessage());
+            $this->assertStringContainsString('Will not follow more than 3 redirects', $this->causes($e));
+        }
+
+        // The first request and three redirects. Http::recorded() lists one
+        // request more when the transfer fails, so count them here.
+        $this->assertSame(4, $requests);
+    }
+
+    #[Test]
+    public function a_missing_temporary_directory_is_reported(): void
+    {
+        $url = 'https://example.com/image.png';
+        Http::fake([$url => Http::response($this->imageBytes(10, 10))]);
+        $service = $this->makeService(['temp_dir' => $this->tempPath.DIRECTORY_SEPARATOR.'missing']);
+
+        $this->expectException(TemporaryFileException::class);
+        $this->expectExceptionMessage('Could not create temporary file');
+        $service->fromUrl($url);
+    }
+
+    private function causes(\Throwable $e): string
+    {
+        $messages = [];
+        for ($cause = $e; $cause !== null; $cause = $cause->getPrevious()) {
+            $messages[] = $cause->getMessage();
+        }
+
+        return implode("\n", $messages);
     }
 
     #[Test]
@@ -196,17 +298,6 @@ class RemotePipelineTest extends TestCase
     }
 
     #[Test]
-    public function it_continues_reading_a_non_local_stream_when_the_header_probe_is_insufficient(): void
-    {
-        $service = $this->makeService(['remote_read_bytes' => 8192]);
-
-        $disk = $this->useInMemoryDisk('mem');
-        $disk->put('photos/big.png', $this->imageBytes(900, 700));
-
-        $this->assertDimensions(900, 700, $service->fromStorage('mem', 'photos/big.png'));
-    }
-
-    #[Test]
     public function it_throws_invalid_image_for_a_non_image_on_a_non_local_disk(): void
     {
         $disk = $this->useInMemoryDisk('mem');
@@ -235,18 +326,5 @@ class RemotePipelineTest extends TestCase
         }
 
         Http::assertNothingSent();
-    }
-
-    #[Test]
-    public function the_ssrf_rejection_is_catchable_as_a_url_access_exception(): void
-    {
-        Http::fake();
-        $service = new ImageDimensionsService([
-            'enable_cache' => false,
-            'url' => ['allow_private_hosts' => false],
-        ]);
-
-        $this->expectException(UrlAccessException::class);
-        $service->fromUrl('http://169.254.169.254/latest/meta-data/');
     }
 }

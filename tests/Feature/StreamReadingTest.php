@@ -135,6 +135,31 @@ class StreamReadingTest extends TestCase
         $this->assertSame([], glob($this->tempPath.DIRECTORY_SEPARATOR.'imgdim_*'));
     }
 
+    /**
+     * Without a download cap a stream is read to its end, past the 1 MB a
+     * single read takes.
+     */
+    #[Test]
+    public function without_a_download_cap_a_stream_is_read_to_its_end(): void
+    {
+        $jpeg = $this->jpegWithLargeMetadata(40, 30, 40);
+        $this->assertGreaterThan(2 * 1048576, strlen($jpeg));
+        $this->useInMemoryDisk('mem')->put('late.jpg', $jpeg);
+        $service = $this->service(['max_download_bytes' => 0]);
+
+        $this->assertDimensions(40, 30, $service->fromStream(CountingStream::open($jpeg)));
+        $this->assertDimensions(40, 30, $service->fromStorage('mem', 'late.jpg'));
+    }
+
+    #[Test]
+    public function without_any_cap_an_svg_is_read_to_its_end(): void
+    {
+        $svg = '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="34"><!--'.str_repeat('x', 3000000).'--></svg>';
+        $service = $this->service(['max_download_bytes' => 0, 'svg' => ['max_file_size' => 0]]);
+
+        $this->assertDimensions(12, 34, $service->fromStream(CountingStream::open($svg)));
+    }
+
     #[Test]
     public function reading_on_stops_at_the_download_cap(): void
     {
@@ -148,14 +173,5 @@ class StreamReadingTest extends TestCase
         }
 
         $this->assertLessThanOrEqual(400001 + 8192, CountingStream::bytesRead($stream));
-    }
-
-    private function jpegWithLargeMetadata(int $width, int $height): string
-    {
-        $jpeg = $this->imageBytes($width, $height, 'jpg');
-        $segment = "\xFF\xE9".pack('n', 65535).str_repeat("\0", 65533);
-
-        // After the SOI marker.
-        return substr($jpeg, 0, 2).str_repeat($segment, 4).substr($jpeg, 2);
     }
 }
