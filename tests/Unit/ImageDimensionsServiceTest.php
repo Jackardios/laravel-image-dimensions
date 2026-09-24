@@ -234,6 +234,30 @@ class ImageDimensionsServiceTest extends TestCase
     }
 
     #[Test]
+    public function it_throws_exception_for_non_existent_file_on_a_non_local_disk(): void
+    {
+        $this->useInMemoryDisk('remote');
+
+        $this->expectException(FileNotFoundException::class);
+        $this->expectExceptionMessage("File not found on disk 'remote': missing.png");
+        $this->service->fromStorage('remote', 'missing.png');
+    }
+
+    #[Test]
+    public function it_delegates_local_disks_to_the_local_lookup(): void
+    {
+        config(['image-dimensions.enable_cache' => true]);
+        $service = new ImageDimensionsService;
+        Storage::fake('test-disk');
+        Storage::disk('test-disk')->put('image.png', file_get_contents($this->createImage('test.png', 30, 40)));
+        $path = realpath(Storage::disk('test-disk')->path('image.png'));
+
+        $this->assertSame(['width' => 30, 'height' => 40], $service->fromStorage('test-disk', 'image.png'));
+        // Shares the fromLocal() cache entry: no temp copy, no storage key.
+        $this->assertTrue(Cache::has('image_dimensions:v1.1:local:'.md5($path).':'.filemtime($path)));
+    }
+
+    #[Test]
     public function it_caches_local_lookups_under_a_path_and_mtime_key(): void
     {
         config(['image-dimensions.enable_cache' => true, 'image-dimensions.cache_ttl' => 120]);
