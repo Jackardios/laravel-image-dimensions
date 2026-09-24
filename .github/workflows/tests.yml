@@ -62,7 +62,9 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
-          extensions: curl, dom, libxml, gd${{ matrix.variant == 'no-intl' && ', :intl' || '' }}
+          # fileinfo is for Laravel's filesystem (league/flysystem-local), not
+          # for the package; Windows builds leave it off.
+          extensions: curl, dom, fileinfo, libxml, gd${{ matrix.variant == 'no-intl' && ', :intl' || '' }}
           coverage: none
 
       - name: Constrain Laravel version
@@ -104,7 +106,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.5'
-          extensions: curl, dom, libxml, gd
+          extensions: curl, dom, fileinfo, libxml, gd
           coverage: none
 
       - name: Add paratest
@@ -133,7 +135,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.5'
-          extensions: curl, dom, libxml, gd
+          extensions: curl, dom, fileinfo, libxml, gd
           coverage: pcov
 
       - name: Add Infection
@@ -171,7 +173,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
-          extensions: curl, dom, libxml, gd
+          extensions: curl, dom, fileinfo, libxml, gd
           coverage: none
 
       - name: Constrain Laravel version
@@ -198,7 +200,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.5'
-          extensions: curl, dom, libxml, gd
+          extensions: curl, dom, fileinfo, libxml, gd
           coverage: none
 
       - name: Validate composer.json
@@ -242,7 +244,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
-          extensions: curl, dom, libxml, gd
+          extensions: curl, dom, fileinfo, libxml, gd
           coverage: none
 
       - name: Install dependencies
@@ -269,7 +271,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.5'
-          extensions: curl, dom, libxml, gd
+          extensions: curl, dom, fileinfo, libxml, gd
           coverage: none
 
       - name: Require the development versions
