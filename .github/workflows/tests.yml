@@ -26,22 +26,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Each Laravel version on the PHP versions it supports.
-        include:
-          - { php: '8.1', laravel: '10', testbench: '8' }
-          - { php: '8.2', laravel: '10', testbench: '8' }
-          - { php: '8.3', laravel: '10', testbench: '8' }
-          - { php: '8.2', laravel: '11', testbench: '9' }
-          - { php: '8.3', laravel: '11', testbench: '9' }
-          - { php: '8.4', laravel: '11', testbench: '9' }
-          - { php: '8.2', laravel: '12', testbench: '10' }
-          - { php: '8.3', laravel: '12', testbench: '10' }
-          - { php: '8.4', laravel: '12', testbench: '10' }
-          - { php: '8.5', laravel: '12', testbench: '10' }
-          - { php: '8.3', laravel: '13', testbench: '11' }
-          - { php: '8.4', laravel: '13', testbench: '11' }
-          - { php: '8.5', laravel: '13', testbench: '11' }
+        # Each Laravel version on the PHP versions it supports. The pairs are
+        # dimensions, not `include` entries: an entry that sets no original
+        # dimension is merged into every combination, overwriting the entry
+        # before it, so a list of them would leave only the last pair.
+        php: ['8.1', '8.2', '8.3', '8.4', '8.5']
+        laravel: ['10', '11', '12', '13']
         dependencies: [lowest, highest]
+        exclude:
+          - { php: '8.4', laravel: '10' }
+          - { php: '8.5', laravel: '10' }
+          - { php: '8.1', laravel: '11' }
+          - { php: '8.5', laravel: '11' }
+          - { php: '8.1', laravel: '12' }
+          - { php: '8.1', laravel: '13' }
+          - { php: '8.2', laravel: '13' }
 
     name: PHP ${{ matrix.php }} - Laravel ${{ matrix.laravel }} - ${{ matrix.dependencies }}
 
@@ -52,6 +51,7 @@ jobs:
       # versions, so the test jobs have to be able to install them; the audit
       # job below reports advisories for the current highest versions.
       COMPOSER_NO_BLOCKING: ${{ (matrix.dependencies == 'lowest' || matrix.laravel == '10' || matrix.laravel == '11') && '1' || '' }}
+      TESTBENCH: ${{ matrix.laravel == '10' && '8' || matrix.laravel == '11' && '9' || matrix.laravel == '12' && '10' || '11' }}
 
     steps:
       - name: Checkout
@@ -68,7 +68,7 @@ jobs:
         run: >
           composer require --dev --no-update --no-interaction
           "laravel/framework:^${{ matrix.laravel }}.0"
-          "orchestra/testbench:^${{ matrix.testbench }}.0"
+          "orchestra/testbench:^${{ env.TESTBENCH }}.0"
 
       - name: Install dependencies
         uses: ramsey/composer-install@v4
@@ -76,7 +76,7 @@ jobs:
           dependency-versions: ${{ matrix.dependencies }}
 
       - name: Show installed versions
-        run: composer show laravel/framework orchestra/testbench-core phpunit/phpunit guzzlehttp/guzzle | grep -E '^(name|versions)'
+        run: composer show | grep -E '^(laravel/framework|orchestra/testbench-core|phpunit/phpunit|guzzlehttp/guzzle) '
 
       - name: Run tests
         run: vendor/bin/phpunit --order-by=random
