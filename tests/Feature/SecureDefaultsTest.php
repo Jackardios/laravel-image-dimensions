@@ -91,7 +91,7 @@ class SecureDefaultsTest extends TestCase
         /** @var array<string, mixed> $options */
         $options = $method->invoke($service);
 
-        $this->assertTrue($options['stream'], 'the body must be streamed, not buffered');
+        $this->assertFalse($options['decode_content'], 'the download cap must count the bytes received');
         $this->assertSame(15, $options['timeout']);
         $this->assertSame(4, $options['connect_timeout']);
         $this->assertTrue($options['verify']);

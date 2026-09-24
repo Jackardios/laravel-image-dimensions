@@ -6,6 +6,7 @@ namespace Jackardios\ImageDimensions;
 
 use Closure;
 use Illuminate\Contracts\Filesystem\Filesystem;
+use Illuminate\Http\Client\StrayRequestException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
@@ -20,14 +21,18 @@ use Jackardios\ImageDimensions\Exceptions\UrlAccessException;
 use Jackardios\ImageDimensions\Exceptions\UrlNotAllowedException;
 use Jackardios\ImageDimensions\Support\SvgDimensionsExtractor;
 use Jackardios\ImageDimensions\Support\TemporaryFile;
+use Jackardios\ImageDimensions\Support\TransferStopped;
 use Jackardios\ImageDimensions\Support\UrlGuard;
 use League\Flysystem\Local\LocalFilesystemAdapter;
+use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Message\StreamInterface;
 use SplFileInfo;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
 use Throwable;
 
 class ImageDimensionsService implements ImageDimensionsContract
 {
+    /** @var int<8192, 1048576> */
     protected int $remoteReadBytes;
 
     protected int $maxDownloadBytes;
@@ -360,8 +365,10 @@ class ImageDimensionsService implements ImageDimensionsContract
     }
 
     /**
-     * Guzzle options for an image fetch: stream the body rather than buffering
-     * it, and re-validate every redirect hop against the SSRF guard.
+     * Guzzle options for an image fetch: a total deadline and a connect
+     * timeout (both enforced by cURL), no transparent decompression (so the
+     * download cap counts the bytes actually written), and redirect hops
+     * re-validated against the SSRF guard.
      *
      * @return array<string, mixed>
      */
@@ -369,7 +376,7 @@ class ImageDimensionsService implements ImageDimensionsContract
     {
         return [
             ...$this->httpOptions,
-            'stream' => true,
+            'decode_content' => false,
             'allow_redirects' => [
                 'max' => $this->urlGuard->maxRedirects(),
                 'strict' => true,
@@ -381,7 +388,13 @@ class ImageDimensionsService implements ImageDimensionsContract
     }
 
     /**
-     * Get dimensions from a URL, reading only as much of the body as needed.
+     * Get dimensions from a URL, downloading only as much of the body as
+     * needed.
+     *
+     * The body goes straight to a temporary file. Once remote_read_bytes have
+     * arrived, the header is inspected and the transfer is cut short if it
+     * already gives the dimensions; otherwise it continues up to the download
+     * cap. Redirect and error bodies are never inspected.
      *
      * @return array{width: int, height: int}
      *
@@ -392,13 +405,59 @@ class ImageDimensionsService implements ImageDimensionsContract
      */
     protected function getDimensionsFromUrl(string $url): array
     {
+        $temp = new TemporaryFile($this->tempDir, 'imgdim_url_');
+        $transfer = ['status' => 0, 'inspected' => false, 'svg' => false];
+
+        $options = [
+            ...$this->requestOptions(),
+            // A path, not a handle: each hop of a redirect chain reopens (and
+            // so empties) the file, and a handle would be closed along with
+            // the discarded redirect response.
+            'sink' => $temp->path(),
+            'on_headers' => function (ResponseInterface $response) use (&$transfer, $temp): void {
+                // A hop with an empty body never reopens the file, which then
+                // still holds the previous hop's body.
+                $temp->truncate();
+                $transfer = ['status' => $response->getStatusCode(), 'inspected' => false, 'svg' => false];
+            },
+            'progress' => function (int $expected, int $received) use (&$transfer, $temp): void {
+                $this->inspectTransfer($transfer, $temp, $expected, $received);
+            },
+        ];
+
         try {
-            $response = Http::withOptions($this->requestOptions())->get($url);
-        } catch (UrlNotAllowedException $e) {
-            // A redirect hop pointed at a disallowed host; keep the SSRF verdict.
+            return $this->fetchIntoTemporaryFile($url, $temp, $options);
+        } finally {
+            $temp->delete();
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $options
+     * @return array{width: int, height: int}
+     *
+     * @throws UrlAccessException
+     * @throws TemporaryFileException
+     * @throws FileTooLargeException
+     * @throws InvalidImageException
+     */
+    private function fetchIntoTemporaryFile(string $url, TemporaryFile $temp, array $options): array
+    {
+        try {
+            $response = Http::withHeaders(['Accept-Encoding' => 'identity'])->withOptions($options)->get($url);
+        } catch (TransferStopped $stopped) {
+            return $stopped->dimensions;
+        } catch (ImageDimensionsException $e) {
+            // A size cap was hit mid-transfer, or a redirect hop pointed at a
+            // disallowed host.
             throw $e;
         } catch (Throwable $e) {
-            // Connection failures, redirect loops, DNS errors, etc.
+            if ($e instanceof StrayRequestException) {
+                // A test that forgot to fake this URL; not a package failure.
+                throw $e;
+            }
+
+            // Connection failures, timeouts, redirect loops, DNS errors, etc.
             throw UrlAccessException::couldNotOpen($url, $e);
         }
 
@@ -406,19 +465,108 @@ class ImageDimensionsService implements ImageDimensionsContract
             throw UrlAccessException::couldNotOpen($url, null, $response->status());
         }
 
-        $this->assertContentLengthWithinLimit($response->header('Content-Length'));
+        $body = $response->toPsrResponse()->getBody();
 
-        $stream = $response->toPsrResponse()->getBody()->detach();
-        if (! is_resource($stream)) {
-            throw UrlAccessException::couldNotOpen($url);
+        if ($body->getMetadata('uri') !== $temp->path()) {
+            // Http::fake() (or a custom handler) hands back its own body and
+            // may not have written it to the sink: a reused fake response is
+            // already read to the end. Take the body itself instead.
+            $temp->truncate();
+            $this->copyBody($body, $temp);
         }
 
-        $temp = new TemporaryFile($this->tempDir, 'imgdim_url_');
+        clearstatcache(true, $temp->path());
+        $size = @filesize($temp->path());
+        $limit = $this->maxDownloadBytes;
+        if ($limit > 0 && $size !== false && $size > $limit) {
+            throw FileTooLargeException::forDownload($limit);
+        }
 
-        try {
-            return $this->resolveFromStream($stream, $temp, $url);
-        } finally {
-            @fclose($stream);
+        return $this->analyzeFile($temp->path(), $url);
+    }
+
+    /**
+     * Progress callback of a URL transfer: enforce the size caps and stop the
+     * transfer as soon as the header gives the dimensions.
+     *
+     * @param  array{status: int, inspected: bool, svg: bool}  $transfer
+     *
+     * @throws FileTooLargeException
+     * @throws TransferStopped
+     */
+    private function inspectTransfer(array &$transfer, TemporaryFile $temp, int $expected, int $received): void
+    {
+        if ($transfer['status'] < 200 || $transfer['status'] >= 300) {
+            return;
+        }
+
+        if (! $transfer['inspected'] && $received >= $this->remoteReadBytes) {
+            $transfer['inspected'] = true;
+            $this->inspectHeader($transfer, $temp, $expected);
+        }
+
+        $this->assertWithinTransferLimit($transfer['svg'], $received);
+    }
+
+    /**
+     * @param  array{status: int, inspected: bool, svg: bool}  $transfer
+     *
+     * @throws FileTooLargeException
+     * @throws TransferStopped
+     */
+    private function inspectHeader(array &$transfer, TemporaryFile $temp, int $expected): void
+    {
+        $head = (string) @file_get_contents($temp->path(), false, null, 0, $this->remoteReadBytes);
+
+        if (SvgDimensionsExtractor::startsWithMarkup($head)) {
+            // SVG needs the whole document; from here on its own cap applies.
+            $transfer['svg'] = true;
+        } elseif (($dimensions = $this->rasterDimensions(@getimagesizefromstring($head))) !== null) {
+            throw new TransferStopped($dimensions);
+        }
+
+        // The header was not enough. If the declared length is already over
+        // the cap, fail now instead of downloading up to it.
+        $this->assertWithinTransferLimit($transfer['svg'], $expected);
+    }
+
+    /**
+     * @throws FileTooLargeException
+     */
+    private function assertWithinTransferLimit(bool $svg, int $bytes): void
+    {
+        if ($svg && $this->svgMaxFileSize > 0 && $bytes > $this->svgMaxFileSize) {
+            throw FileTooLargeException::forSvg($this->svgMaxFileSize);
+        }
+
+        if ($this->maxDownloadBytes > 0 && $bytes > $this->maxDownloadBytes) {
+            throw FileTooLargeException::forDownload($this->maxDownloadBytes);
+        }
+    }
+
+    /**
+     * Copy a response body into a temporary file, up to the size caps.
+     *
+     * @throws FileTooLargeException
+     * @throws TemporaryFileException
+     */
+    private function copyBody(StreamInterface $body, TemporaryFile $temp): void
+    {
+        if ($body->isSeekable()) {
+            $body->rewind();
+        }
+
+        $svg = null;
+
+        while (! $body->eof()) {
+            $chunk = $body->read(1048576);
+            if ($chunk === '') {
+                break;
+            }
+
+            $svg ??= SvgDimensionsExtractor::startsWithMarkup($chunk);
+            $temp->append($chunk);
+            $this->assertWithinTransferLimit($svg, $temp->bytesWritten());
         }
     }
 
@@ -512,28 +660,6 @@ class ImageDimensionsService implements ImageDimensionsContract
     }
 
     /**
-     * Reject a response whose declared Content-Length exceeds the download cap
-     * before any body is read.
-     *
-     * @throws FileTooLargeException
-     */
-    protected function assertContentLengthWithinLimit(string $contentLength): void
-    {
-        if ($this->maxDownloadBytes <= 0 || $contentLength === '') {
-            return;
-        }
-
-        // A duplicated header arrives joined as "123, 123", and values may carry
-        // surrounding whitespace; take the first token so the pre-download check
-        // is not silently skipped.
-        $first = trim(explode(',', $contentLength)[0]);
-
-        if (ctype_digit($first) && (int) $first > $this->maxDownloadBytes) {
-            throw FileTooLargeException::forDownload($this->maxDownloadBytes);
-        }
-    }
-
-    /**
      * Determine image dimensions for a file already on the local filesystem.
      *
      * The format is taken from the contents, never from a file name or MIME
@@ -569,12 +695,23 @@ class ImageDimensionsService implements ImageDimensionsContract
             return $this->svgExtractor->extract($content)->toArray();
         }
 
-        $size = @getimagesize($path);
-        if ($size === false || (int) $size[0] <= 0 || (int) $size[1] <= 0) {
-            throw InvalidImageException::forPath($label, 'Could not determine image dimensions');
+        return $this->rasterDimensions(@getimagesize($path))
+            ?? throw InvalidImageException::forPath($label, 'Could not determine image dimensions');
+    }
+
+    /**
+     * Dimensions from a getimagesize() result, or null if it has none.
+     *
+     * @param  array<int|string, mixed>|false  $size
+     * @return array{width: int, height: int}|null
+     */
+    private function rasterDimensions(array|false $size): ?array
+    {
+        if ($size === false || ! is_int($size[0] ?? null) || ! is_int($size[1] ?? null) || $size[0] <= 0 || $size[1] <= 0) {
+            return null;
         }
 
-        return ['width' => (int) $size[0], 'height' => (int) $size[1]];
+        return ['width' => $size[0], 'height' => $size[1]];
     }
 
     /**

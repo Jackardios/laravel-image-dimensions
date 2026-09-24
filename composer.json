@@ -12,6 +12,7 @@
     ],
     "require": {
         "php": "^8.2",
+        "ext-curl": "*",
         "ext-dom": "*",
         "ext-fileinfo": "*",
         "ext-libxml": "*",

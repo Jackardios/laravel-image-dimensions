@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Jackardios\ImageDimensions\Tests\Feature;
 
 use GuzzleHttp\Psr7\Utils;
+use Illuminate\Http\Client\StrayRequestException;
 use Illuminate\Support\Facades\Http;
 use Jackardios\ImageDimensions\Exceptions\FileTooLargeException;
 use Jackardios\ImageDimensions\Exceptions\InvalidImageException;
@@ -77,6 +78,33 @@ class RemotePipelineTest extends TestCase
         Http::assertSentCount(1);
     }
 
+    /**
+     * Regression: the body stream of a response registered once with
+     * Http::fake() was detached by the first request, so every later request
+     * for it failed.
+     */
+    #[Test]
+    public function a_fake_response_can_be_served_more_than_once(): void
+    {
+        Http::fake(['https://example.com/*' => Http::response($this->imageBytes(12, 34))]);
+
+        $this->assertDimensions(12, 34, $this->service->fromUrl('https://example.com/a.png'));
+        $this->assertDimensions(12, 34, $this->service->fromUrl('https://example.com/b.png'));
+    }
+
+    #[Test]
+    public function a_stray_request_is_reported_as_such(): void
+    {
+        if (! class_exists(StrayRequestException::class)) {
+            $this->markTestSkipped('This Laravel version reports stray requests with a plain RuntimeException.');
+        }
+
+        // Http::preventStrayRequests() is on (see TestCase): a URL a test
+        // forgot to fake must not pass for an unreachable one.
+        $this->expectException(StrayRequestException::class);
+        $this->service->tryFromUrl('https://example.com/not-faked.png');
+    }
+
     #[Test]
     public function it_throws_invalid_image_for_a_non_image_url_not_url_access(): void
     {
@@ -95,18 +123,6 @@ class RemotePipelineTest extends TestCase
 
         $this->expectException(UrlAccessException::class);
         $this->service->fromUrl($url);
-    }
-
-    #[Test]
-    public function it_rejects_a_response_whose_content_length_exceeds_the_cap(): void
-    {
-        $service = $this->makeService(['max_download_bytes' => 1024]);
-
-        $url = 'https://example.com/huge.bin';
-        Http::fake([$url => Http::response('junk', 200, ['Content-Length' => (string) (5 * 1024 * 1024)])]);
-
-        $this->expectException(FileTooLargeException::class);
-        $service->fromUrl($url);
     }
 
     #[Test]
@@ -145,28 +161,6 @@ class RemotePipelineTest extends TestCase
         $this->expectException(FileTooLargeException::class);
         $this->expectExceptionMessage('SVG file is too large (max 4096 bytes)');
         $service->fromUrl($url);
-    }
-
-    /**
-     * Regression: a duplicated Content-Length header arrives joined as "N, N",
-     * which failed ctype_digit() and silently skipped the pre-download check.
-     */
-    #[Test]
-    public function it_honours_a_duplicated_or_padded_content_length_header(): void
-    {
-        foreach (['5242880, 5242880', ' 5242880'] as $headerValue) {
-            $service = $this->makeService(['max_download_bytes' => 1024]);
-
-            $url = 'https://example.com/huge-'.md5($headerValue).'.bin';
-            Http::fake([$url => Http::response('junk', 200, ['Content-Length' => $headerValue])]);
-
-            try {
-                $service->fromUrl($url);
-                $this->fail("Expected FileTooLargeException for Content-Length '{$headerValue}'");
-            } catch (FileTooLargeException $e) {
-                $this->assertStringContainsString('too large to download', $e->getMessage());
-            }
-        }
     }
 
     /**
