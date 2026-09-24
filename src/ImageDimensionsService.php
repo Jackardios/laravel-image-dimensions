@@ -273,7 +273,7 @@ class ImageDimensionsService implements ImageDimensionsContract
         try {
             $modifiedTime = $disk->lastModified($path);
         } catch (PathTraversalDetected $e) {
-            throw new InvalidImageException("Invalid storage path: {$path}", 0, $e);
+            throw new InvalidImageException("Invalid storage path: {$path}", previous: $e);
         } catch (Throwable) {
             if (! $this->storageFileExists($disk, $path)) {
                 throw FileNotFoundException::forStorage($diskName, $path);
@@ -745,18 +745,20 @@ class ImageDimensionsService implements ImageDimensionsContract
         }
 
         if (self::isMarkup($head)) {
+            // One byte past the stricter cap shows that it is exceeded.
             $limit = $this->svgReadLimit();
-            $content = $head.StreamReader::read($stream, $limit === null ? PHP_INT_MAX : max(0, $limit + 1 - strlen($head)));
+            $content = $head.StreamReader::read($stream, $limit === null ? PHP_INT_MAX : $limit + 1 - strlen($head));
 
-            // Over the download cap, unless the SVG cap is the stricter one:
-            // analyzeSvg() reports that.
-            if ($this->maxDownloadBytes > 0 && strlen($content) > $this->maxDownloadBytes
-                && ($this->svgMaxFileSize <= 0 || $this->svgMaxFileSize > $this->maxDownloadBytes)
-            ) {
+            // The SVG cap first: when both are exceeded, it is the stricter one.
+            if ($this->svgMaxFileSize > 0 && strlen($content) > $this->svgMaxFileSize) {
+                throw FileTooLargeException::forSvg($this->svgMaxFileSize);
+            }
+
+            if ($this->maxDownloadBytes > 0 && strlen($content) > $this->maxDownloadBytes) {
                 throw FileTooLargeException::forDownload($this->maxDownloadBytes);
             }
 
-            return $this->analyzeSvg($content, $label);
+            return $this->svgExtractor->extract($content)->toArray();
         }
 
         $dimensions = $this->rasterDimensions(
@@ -825,7 +827,7 @@ class ImageDimensionsService implements ImageDimensionsContract
         try {
             return $disk->exists($path);
         } catch (PathTraversalDetected $e) {
-            throw new InvalidImageException("Invalid storage path: {$path}", 0, $e);
+            throw new InvalidImageException("Invalid storage path: {$path}", previous: $e);
         } catch (Throwable $e) {
             throw StorageAccessException::couldNotAccess($path, $e);
         }

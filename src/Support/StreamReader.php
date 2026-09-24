@@ -17,7 +17,8 @@ final class StreamReader
     private const MAX_EMPTY_READS = 50;
 
     /**
-     * Up to $maxBytes from a stream; fewer once it ends or stays silent.
+     * Up to $maxBytes from a stream (none for zero or less); fewer once it
+     * ends or stays silent.
      *
      * The end of a stream is detected by feof(), so an empty read only means
      * "nothing available right now", as with a non-blocking stream. Those are

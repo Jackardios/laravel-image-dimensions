@@ -43,11 +43,7 @@ final class TemporaryFile
         // false for a writable directory with the read-only attribute, and
         // tempnam() keeps three characters of the prefix. Everywhere, tempnam()
         // silently falls back to the system temp directory when it cannot
-        // create the file in the one it was given.
-        if (! is_dir($directory)) {
-            throw TemporaryFileException::couldNotCreate();
-        }
-
+        // create the file in the one it was given; fopen() fails instead.
         $base = rtrim($directory, '/\\').DIRECTORY_SEPARATOR.$prefix;
         $handle = false;
         for ($attempt = 0; $attempt < 3 && $handle === false; $attempt++) {

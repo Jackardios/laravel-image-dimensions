@@ -68,17 +68,9 @@ final class HeifDimensionsReader
             $offset = 0;
 
             // Top-level box headers only; image data (`mdat`) is skipped.
-            while (true) {
-                if (@fseek($handle, $offset) !== 0) {
-                    return null;
-                }
-
-                $header = (string) @fread($handle, 16);
-                $box = self::boxHeader($header, 0, PHP_INT_MAX);
-                if ($box === null) {
-                    return null;
-                }
-
+            while (@fseek($handle, $offset) === 0
+                && ($box = self::boxHeader((string) @fread($handle, 16), 0, PHP_INT_MAX)) !== null
+            ) {
                 [$type, $headerSize, $size] = $box;
 
                 if ($type === 'meta') {
@@ -107,6 +99,8 @@ final class HeifDimensionsReader
 
                 $offset += $size;
             }
+
+            return null;
         } finally {
             @fclose($handle);
         }
@@ -255,12 +249,7 @@ final class HeifDimensionsReader
      */
     private static function boxes(string $data, int $offset, int $end): iterable
     {
-        while ($offset + 8 <= $end) {
-            $box = self::boxHeader($data, $offset, $end);
-            if ($box === null) {
-                return;
-            }
-
+        while ($offset + 8 <= $end && ($box = self::boxHeader($data, $offset, $end)) !== null) {
             [$type, $headerSize, $size] = $box;
             $boxEnd = $size === null ? $end : $offset + $size;
 
@@ -271,30 +260,21 @@ final class HeifDimensionsReader
     }
 
     /**
+     * Bytes missing at the end of $data read as zeros: a truncated header
+     * gives a size that callers find does not fit what they have.
+     *
      * @return array{0: string, 1: int, 2: int|null}|null Type, header size and
      *                                                    box size (null: to the end).
      */
     private static function boxHeader(string $data, int $offset, int $end): ?array
     {
-        if (strlen($data) < $offset + 8) {
-            return null;
-        }
-
         $size = self::uint32($data, $offset);
         $type = substr($data, $offset + 4, 4);
 
         if ($size === 1) {
-            if (strlen($data) < $offset + 16) {
-                return null;
-            }
-
-            $high = self::uint32($data, $offset + 8);
-            $low = self::uint32($data, $offset + 12);
-            if ($high > 0x7FFFFFFF) {
-                return null;
-            }
-
-            $size = ($high << 32) | $low;
+            // A size of 2^63 or more wraps around to a negative one, which
+            // is rejected below.
+            $size = (self::uint32($data, $offset + 8) << 32) | self::uint32($data, $offset + 12);
             $headerSize = 16;
         } elseif ($size === 0) {
             return $end === PHP_INT_MAX ? [$type, 8, null] : [$type, 8, $end - $offset];

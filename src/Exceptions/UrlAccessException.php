@@ -17,6 +17,6 @@ class UrlAccessException extends ImageDimensionsException
             $message .= " (HTTP {$statusCode})";
         }
 
-        return new self($message, 0, $previous);
+        return new self($message, previous: $previous);
     }
 }
