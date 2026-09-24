@@ -9,16 +9,16 @@ A robust and efficient Laravel package to get the dimensions (width and height) 
 
 -   **Multiple Sources**: Get dimensions from local file paths, remote URLs, and Laravel Storage disks.
 -   **Wide Format Support**: Supports common image formats like PNG, JPEG, GIF, WebP, and BMP.
--   **Advanced SVG Parsing**: Correctly determines dimensions from SVGs, including those using `viewBox` or percentage-based sizes.
+-   **Advanced SVG Parsing**: Determines dimensions from SVGs, including absolute units (`in`, `cm`, `mm`, `pt`, `pc`), `viewBox`, and percentage-based sizes.
 -   **Optimized Remote Fetching**: Reads a minimal portion of remote files first, avoiding large downloads when possible.
 -   **Built-in Caching**: Automatically caches image dimensions to boost performance for repeated requests.
 -   **Laravel Native**: Seamless integration with Laravel's Filesystem, Cache, and HTTP Client.
--   **Secure**: Includes basic sanitization for SVG files to prevent XSS vulnerabilities.
+-   **Safe SVG Handling**: SVG markup is parsed without network access and without loading or expanding entities.
 
 ## Requirements
 
--   PHP 8.1+
--   Laravel 10.x, 11.x, or 12.x
+-   PHP 8.1 – 8.5
+-   Laravel 10.x, 11.x, 12.x, or 13.x (each on the PHP versions it supports)
 
 ## Installation
 
@@ -125,6 +125,13 @@ The cache key is generated based on the source type, identifier (path/URL), and 
 ### SVG Handling
 
 -   `svg.max_file_size`: The maximum allowed file size (in bytes) for SVG files to prevent parsing of excessively large files. Default: `10485760` (10MB).
+
+Any file whose content starts with markup (`<`) is treated as SVG, whatever its extension or MIME type. Dimensions are resolved from the root `<svg>` element as follows:
+
+-   `width` and `height` in pixels, either unitless or with an absolute unit (`px`, `in`, `cm`, `mm`, `pt`, `pc`, at 96 DPI). Fractional values are rounded up.
+-   A side given as a percentage, a relative unit (`em`, `ex`, …) or `auto`, or left out, is taken from the `viewBox`. If only one side is known, the other follows the `viewBox` aspect ratio, as in a browser.
+-   An explicit `0` width or height, or no usable size at all, throws an `InvalidImageException`.
+-   Entity references inside `width`, `height` or `viewBox` are rejected, because expanding them can take quadratic time.
 
 ## Testing
 
