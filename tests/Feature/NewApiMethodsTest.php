@@ -119,6 +119,36 @@ class NewApiMethodsTest extends TestCase
         $this->assertDimensions(70, 30, $this->service->fromUploadedFile($uploaded));
     }
 
+    /**
+     * Messages name an upload by its client name, as they do once the file
+     * has been read: the server's temporary path means nothing to the user.
+     */
+    #[Test]
+    public function an_unreadable_upload_is_named_by_its_client_name(): void
+    {
+        $path = $this->createImage('phpA1b2C3', 10, 10);
+        $this->makeUnreadable($path);
+
+        try {
+            $this->service->fromUploadedFile(new UploadedFile($path, 'holiday.png', 'image/png', null, true));
+            $this->fail('Expected an InvalidImageException.');
+        } catch (InvalidImageException $e) {
+            $this->assertSame('File is not readable: holiday.png', $e->getMessage());
+        }
+    }
+
+    #[Test]
+    public function a_vanished_upload_is_named_by_its_client_name(): void
+    {
+        $path = $this->createImage('phpA1b2C3', 10, 10);
+        $upload = new UploadedFile($path, 'holiday.png', 'image/png', null, true);
+        unlink($path);
+
+        $this->expectException(FileNotFoundException::class);
+        $this->expectExceptionMessage('Local file not found: holiday.png');
+        $this->service->fromUploadedFile($upload);
+    }
+
     #[Test]
     public function it_reads_a_file_that_is_no_upload(): void
     {

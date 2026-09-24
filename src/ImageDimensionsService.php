@@ -377,17 +377,19 @@ class ImageDimensionsService implements ImageDimensionsContract
             $path = $file->getPathname();
         }
 
-        if ($path === '' || ! is_file($path)) {
-            throw FileNotFoundException::forLocal($path);
-        }
-
-        if (! is_readable($path)) {
-            throw new InvalidImageException("File is not readable: {$path}");
-        }
-
+        // An upload is named by its client name: its temporary path on the
+        // server means nothing to the user and should not be shown to them.
         $label = $file instanceof UploadedFile
             ? ($file->getClientOriginalName() ?: $path)
             : $path;
+
+        if ($path === '' || ! is_file($path)) {
+            throw FileNotFoundException::forLocal($label);
+        }
+
+        if (! is_readable($path)) {
+            throw new InvalidImageException("File is not readable: {$label}");
+        }
 
         return Dimensions::fromArray($this->analyzeFile($path, $label));
     }
