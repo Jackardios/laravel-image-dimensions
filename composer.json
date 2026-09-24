@@ -14,16 +14,16 @@
         "php": "^8.2",
         "ext-curl": "*",
         "ext-dom": "*",
-        "ext-fileinfo": "*",
         "ext-libxml": "*",
-        "guzzlehttp/guzzle": "^7.8",
-        "guzzlehttp/psr7": "^1.9.1 || ^2.5.1",
+        "guzzlehttp/guzzle": "^7.15.2 || ^8.0.1",
+        "guzzlehttp/psr7": "^2.13 || ^3.0",
         "illuminate/cache": "^12.0 || ^13.0",
         "illuminate/contracts": "^12.0 || ^13.0",
         "illuminate/filesystem": "^12.0 || ^13.0",
         "illuminate/http": "^12.0 || ^13.0",
         "illuminate/support": "^12.0 || ^13.0",
-        "symfony/polyfill-intl-idn": "^1.26"
+        "symfony/polyfill-intl-idn": "^1.26",
+        "symfony/polyfill-intl-normalizer": "^1.18"
     },
     "require-dev": {
         "ext-gd": "*",
@@ -35,6 +35,7 @@
         "phpunit/phpunit": "^11.5 || ^12.0 || ^13.0"
     },
     "suggest": {
+        "ext-intl": "Converts internationalized host names natively; symfony/polyfill-intl-idn does it otherwise.",
         "league/flysystem-local": "Enables a faster local-filesystem path for Storage disks."
     },
     "autoload": {
