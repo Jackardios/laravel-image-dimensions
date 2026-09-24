@@ -9,11 +9,17 @@
         "summary": "build/infection-summary.log"
     },
     "mutators": {
-        "@default": true
+        "@default": true,
+        // An equivalent mutant: removing the (float) cast in
+        // SvgDimensionsExtractor::parseLength() changes nothing, because the
+        // regex only lets a plain numeric string through and PHP multiplies it
+        // the same.
+        "CastFloat": {
+            "ignoreSourceCodeByRegex": [
+                ".*\\$pixels = \\(float\\) \\$m\\['number'\\].*"
+            ]
+        }
     },
-    // One known equivalent mutant: removing the (float) cast in
-    // SvgDimensionsExtractor::parseLength() changes nothing, because the regex
-    // only lets a plain numeric string through and PHP multiplies it the same.
-    "minMsi": 99,
-    "minCoveredMsi": 99
+    "minMsi": 100,
+    "minCoveredMsi": 100
 }
