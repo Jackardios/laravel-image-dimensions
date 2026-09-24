@@ -35,7 +35,9 @@ from the SVG fixes below.
 - `guzzlehttp/guzzle` and the `illuminate/http`, `illuminate/cache` and
   `illuminate/contracts` components the package uses are now declared as
   dependencies. On Laravel 10, whose `laravel/framework` only suggests Guzzle,
-  `fromUrl()` failed with a missing class when the app had no Guzzle.
+  `fromUrl()` failed with a missing class when the app had no Guzzle. Guzzle 7
+  and 8 are both accepted (`^7.5 || ^8.0.1`; 8.0.0 has a published advisory),
+  so a Laravel 13 app that already has Guzzle 8 does not have to downgrade it.
 
 ### Security
 
