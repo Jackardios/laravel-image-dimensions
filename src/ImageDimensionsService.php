@@ -28,18 +28,6 @@ use Throwable;
 
 class ImageDimensionsService implements ImageDimensionsContract
 {
-    /**
-     * Extensions that are definitively not SVG, used as a fast path in
-     * {@see looksLikeSvg()}. Keyed for O(1) lookup.
-     *
-     * @var array<string, true>
-     */
-    protected const RASTER_EXTENSIONS = [
-        'jpg' => true, 'jpeg' => true, 'png' => true, 'gif' => true,
-        'webp' => true, 'bmp' => true, 'avif' => true, 'ico' => true,
-        'tif' => true, 'tiff' => true,
-    ];
-
     protected int $remoteReadBytes;
 
     protected int $maxDownloadBytes;
@@ -229,7 +217,7 @@ class ImageDimensionsService implements ImageDimensionsContract
         $temp = new TemporaryFile($this->tempDir, 'imgdim_contents_');
         $temp->append($contents);
 
-        return Dimensions::fromArray($this->analyzeFile($temp->path(), null, '(contents)'));
+        return Dimensions::fromArray($this->analyzeFile($temp->path(), '(contents)'));
     }
 
     /**
@@ -269,7 +257,7 @@ class ImageDimensionsService implements ImageDimensionsContract
             }
         }
 
-        return Dimensions::fromArray($this->analyzeFile($temp->path(), null, '(stream)'));
+        return Dimensions::fromArray($this->analyzeFile($temp->path(), '(stream)'));
     }
 
     /**
@@ -303,7 +291,7 @@ class ImageDimensionsService implements ImageDimensionsContract
             ? ($file->getClientOriginalName() ?: $path)
             : $path;
 
-        return Dimensions::fromArray($this->analyzeFile($path, $label, $label));
+        return Dimensions::fromArray($this->analyzeFile($path, $label));
     }
 
     /**
@@ -428,7 +416,7 @@ class ImageDimensionsService implements ImageDimensionsContract
         $temp = new TemporaryFile($this->tempDir, 'imgdim_url_');
 
         try {
-            return $this->resolveFromStream($stream, $temp, parse_url($url, PHP_URL_PATH) ?: null, $url);
+            return $this->resolveFromStream($stream, $temp, $url);
         } finally {
             @fclose($stream);
         }
@@ -482,12 +470,12 @@ class ImageDimensionsService implements ImageDimensionsContract
      * @throws TemporaryFileException
      * @throws InvalidImageException
      */
-    protected function resolveFromStream($stream, TemporaryFile $temp, ?string $nameHint, ?string $label = null): array
+    protected function resolveFromStream($stream, TemporaryFile $temp, string $label): array
     {
         $temp->appendFromStream($stream, $this->remoteReadBytes);
 
         try {
-            return $this->analyzeFile($temp->path(), $nameHint, $label);
+            return $this->analyzeFile($temp->path(), $label);
         } catch (FileTooLargeException $e) {
             // A size cap was already exceeded (e.g. svg.max_file_size). Reading
             // further would only waste bandwidth — this is final, not a
@@ -519,7 +507,7 @@ class ImageDimensionsService implements ImageDimensionsContract
                 }
             }
 
-            return $this->analyzeFile($temp->path(), $nameHint, $label);
+            return $this->analyzeFile($temp->path(), $label);
         }
     }
 
@@ -548,28 +536,27 @@ class ImageDimensionsService implements ImageDimensionsContract
     /**
      * Determine image dimensions for a file already on the local filesystem.
      *
+     * The format is taken from the contents, never from a file name or MIME
+     * type: those are client-controlled for uploads and absent for streamed
+     * temp files.
+     *
      * @param  string  $path  Filesystem path to read.
-     * @param  string|null  $nameHint  Original name/path used for extension-based
-     *                                 format detection. Needed because remote sources are written to
-     *                                 extension-less temp files.
-     * @param  string|null  $label  Human-readable source description for error
-     *                              messages. Defaults to the name hint. Never falls back to $path, which
-     *                              would leak the internal temp-file location to callers.
+     * @param  string  $label  Human-readable source description for error
+     *                         messages. Never the path of an internal temp file,
+     *                         which would leak the server's directory layout.
      * @return array{width: int, height: int}
      *
      * @throws InvalidImageException
      * @throws FileTooLargeException
      */
-    protected function analyzeFile(string $path, ?string $nameHint = null, ?string $label = null): array
+    protected function analyzeFile(string $path, string $label): array
     {
-        $label ??= $nameHint ?? '(unknown source)';
-
         $fileSize = @filesize($path);
         if ($fileSize === false || $fileSize === 0) {
             throw InvalidImageException::forPath($label, 'File is empty.');
         }
 
-        if ($this->looksLikeSvg($path, $nameHint)) {
+        if ($this->startsWithMarkup($path)) {
             if ($this->svgMaxFileSize > 0 && $fileSize > $this->svgMaxFileSize) {
                 throw FileTooLargeException::forSvg($this->svgMaxFileSize);
             }
@@ -591,39 +578,20 @@ class ImageDimensionsService implements ImageDimensionsContract
     }
 
     /**
-     * Decide whether a file should be treated as SVG, using (in order) the
-     * hinted extension, the detected MIME type, and a content sniff. The sniff
-     * covers remote SVGs stored in extension-less temp files with no reliable
-     * MIME type.
+     * Whether a file starts with markup, i.e. is SVG (or some other XML or
+     * HTML document the SVG parser will reject).
      */
-    protected function looksLikeSvg(string $path, ?string $nameHint): bool
+    private function startsWithMarkup(string $path): bool
     {
-        $extension = strtolower(pathinfo($nameHint ?? $path, PATHINFO_EXTENSION));
-        if ($extension === 'svg') {
-            return true;
-        }
-
-        // A known raster extension settles it — skip the MIME probe and content
-        // sniff, which would otherwise open the file twice more before
-        // getimagesize() opens it again.
-        if (isset(self::RASTER_EXTENSIONS[$extension])) {
-            return false;
-        }
-
-        $mimeType = @mime_content_type($path) ?: '';
-        if (str_contains($mimeType, 'svg')) {
-            return true;
-        }
-
         $handle = @fopen($path, 'rb');
         if ($handle === false) {
             return false;
         }
 
-        $head = @fread($handle, 4096);
+        $head = @fread($handle, 1024);
         @fclose($handle);
 
-        return $head !== false && $head !== '' && SvgDimensionsExtractor::sniff($head);
+        return is_string($head) && SvgDimensionsExtractor::startsWithMarkup($head);
     }
 
     /**

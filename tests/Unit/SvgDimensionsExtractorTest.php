@@ -112,20 +112,24 @@ class SvgDimensionsExtractorTest extends TestCase
     }
 
     #[Test]
-    public function it_ignores_a_utf8_bom_and_leading_comment_when_sniffing(): void
+    public function it_recognises_markup_after_a_bom_and_whitespace(): void
     {
-        $this->assertTrue(SvgDimensionsExtractor::sniff("\xEF\xBB\xBF<!-- generated --><svg width='1' height='1'/>"));
-        $this->assertTrue(SvgDimensionsExtractor::sniff('<?xml version="1.0"?><svg/>'));
-        $this->assertTrue(SvgDimensionsExtractor::sniff('<!DOCTYPE svg [<!ENTITY a "b">]><svg/>'));
-        $this->assertTrue(SvgDimensionsExtractor::sniff('<svg:svg xmlns:svg="x"/>'));
+        $this->assertTrue(SvgDimensionsExtractor::startsWithMarkup('<svg/>'));
+        $this->assertTrue(SvgDimensionsExtractor::startsWithMarkup("\xEF\xBB\xBF<!-- generated --><svg/>"));
+        $this->assertTrue(SvgDimensionsExtractor::startsWithMarkup(" \t\r\n<?xml version=\"1.0\"?><svg/>"));
+        $this->assertTrue(SvgDimensionsExtractor::startsWithMarkup("\xEF\xBB\xBF\n<svg/>"));
     }
 
     #[Test]
-    public function it_does_not_sniff_non_svg_content_as_svg(): void
+    public function it_does_not_take_other_content_for_markup(): void
     {
-        $this->assertFalse(SvgDimensionsExtractor::sniff('<html><body></body></html>'));
-        $this->assertFalse(SvgDimensionsExtractor::sniff("\x89PNG\r\n\x1a\n"));
-        $this->assertFalse(SvgDimensionsExtractor::sniff('not xml at all'));
+        $this->assertFalse(SvgDimensionsExtractor::startsWithMarkup(''));
+        $this->assertFalse(SvgDimensionsExtractor::startsWithMarkup("\x89PNG\r\n\x1a\n"));
+        $this->assertFalse(SvgDimensionsExtractor::startsWithMarkup('not xml at all'));
+        // Only a UTF-8 BOM and XML whitespace may precede the markup.
+        $this->assertFalse(SvgDimensionsExtractor::startsWithMarkup("\xEF\xBB<svg/>"));
+        $this->assertFalse(SvgDimensionsExtractor::startsWithMarkup("\x0B<svg/>"));
+        $this->assertFalse(SvgDimensionsExtractor::startsWithMarkup("\x00<svg/>"));
     }
 
     #[Test]
