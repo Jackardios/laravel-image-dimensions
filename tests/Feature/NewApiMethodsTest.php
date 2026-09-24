@@ -9,41 +9,17 @@ use Jackardios\ImageDimensions\Dimensions;
 use Jackardios\ImageDimensions\Exceptions\FileTooLargeException;
 use Jackardios\ImageDimensions\Exceptions\InvalidImageException;
 use Jackardios\ImageDimensions\ImageDimensionsService;
-use Jackardios\ImageDimensions\Tests\Concerns\CreatesTestImages;
 use Jackardios\ImageDimensions\Tests\TestCase;
 use PHPUnit\Framework\Attributes\Test;
 
 class NewApiMethodsTest extends TestCase
 {
-    use CreatesTestImages;
-
     private ImageDimensionsService $service;
-
-    private string $dir;
 
     protected function setUp(): void
     {
         parent::setUp();
         $this->service = new ImageDimensionsService(['enable_cache' => false]);
-        $this->dir = sys_get_temp_dir().'/imgdim_api_'.uniqid();
-        mkdir($this->dir, 0777, true);
-    }
-
-    protected function tearDown(): void
-    {
-        $this->cleanupCreatedFiles($this->dir);
-        parent::tearDown();
-    }
-
-    private function pngBytes(int $width, int $height): string
-    {
-        $image = imagecreatetruecolor($width, $height);
-        ob_start();
-        imagepng($image);
-        $data = (string) ob_get_clean();
-        imagedestroy($image);
-
-        return $data;
     }
 
     // --- fromContents ---
@@ -51,7 +27,7 @@ class NewApiMethodsTest extends TestCase
     #[Test]
     public function it_reads_dimensions_from_raster_contents(): void
     {
-        $this->assertDimensions(64, 48, $this->service->fromContents($this->pngBytes(64, 48)));
+        $this->assertDimensions(64, 48, $this->service->fromContents($this->imageBytes(64, 48)));
     }
 
     #[Test]
@@ -74,7 +50,7 @@ class NewApiMethodsTest extends TestCase
     public function it_reads_dimensions_from_a_stream(): void
     {
         $stream = fopen('php://memory', 'r+');
-        fwrite($stream, $this->pngBytes(30, 90));
+        fwrite($stream, $this->imageBytes(30, 90));
         rewind($stream);
 
         $this->assertDimensions(30, 90, $this->service->fromStream($stream));
@@ -86,7 +62,7 @@ class NewApiMethodsTest extends TestCase
     #[Test]
     public function it_reads_dimensions_from_an_uploaded_file(): void
     {
-        $path = $this->createImage($this->dir, 'upload.png', 220, 140);
+        $path = $this->createImage('upload.png', 220, 140);
         $uploaded = new UploadedFile($path, 'upload.png', 'image/png', null, true);
 
         $this->assertDimensions(220, 140, $this->service->fromUploadedFile($uploaded));
@@ -96,9 +72,8 @@ class NewApiMethodsTest extends TestCase
     public function it_reads_an_svg_upload_without_a_usable_extension(): void
     {
         // Simulate an upload temp file with no extension but SVG contents.
-        $path = $this->dir.'/phpUPLOAD';
+        $path = $this->tempPath.'/phpUPLOAD';
         file_put_contents($path, '<svg xmlns="http://www.w3.org/2000/svg" width="70" height="30"><rect/></svg>');
-        $this->createdFiles[] = $path;
 
         $uploaded = new UploadedFile($path, 'logo.svg', 'image/svg+xml', null, true);
 
@@ -110,16 +85,16 @@ class NewApiMethodsTest extends TestCase
     #[Test]
     public function try_variants_return_dimensions_on_success(): void
     {
-        $path = $this->createImage($this->dir, 'ok.png', 12, 34);
+        $path = $this->createImage('ok.png', 12, 34);
 
         $this->assertDimensions(12, 34, $this->service->tryFromLocal($path));
-        $this->assertDimensions(64, 48, $this->service->tryFromContents($this->pngBytes(64, 48)));
+        $this->assertDimensions(64, 48, $this->service->tryFromContents($this->imageBytes(64, 48)));
     }
 
     #[Test]
     public function try_variants_return_null_on_failure(): void
     {
-        $this->assertNull($this->service->tryFromLocal($this->dir.'/missing.png'));
+        $this->assertNull($this->service->tryFromLocal($this->tempPath.'/missing.png'));
         $this->assertNull($this->service->tryFromContents('not an image'));
         $this->assertNull($this->service->tryFromStorage('nonexistent-disk', 'x.png'));
 
@@ -144,7 +119,7 @@ class NewApiMethodsTest extends TestCase
     #[Test]
     public function the_new_methods_return_the_dimensions_value_object(): void
     {
-        $this->assertInstanceOf(Dimensions::class, $this->service->fromContents($this->pngBytes(5, 5)));
+        $this->assertInstanceOf(Dimensions::class, $this->service->fromContents($this->imageBytes(5, 5)));
     }
 
     /**
@@ -215,7 +190,7 @@ class NewApiMethodsTest extends TestCase
         $service = new ImageDimensionsService(['enable_cache' => false, 'max_download_bytes' => 1048576]);
 
         $stream = fopen('php://temp', 'r+b');
-        fwrite($stream, $this->pngBytes(90, 45));
+        fwrite($stream, $this->imageBytes(90, 45));
         rewind($stream);
 
         $this->assertDimensions(90, 45, $service->fromStream($stream));
@@ -234,14 +209,13 @@ class NewApiMethodsTest extends TestCase
         $service = new ImageDimensionsService(['enable_cache' => true, 'cache_ttl' => 3600]);
 
         // A recycled upload temp path: same name, same mtime, different content.
-        $path = $this->dir.'/phpRECYCLED';
-        $this->createdFiles[] = $path;
+        $path = $this->tempPath.'/phpRECYCLED';
 
-        file_put_contents($path, $this->pngBytes(10, 10));
+        file_put_contents($path, $this->imageBytes(10, 10));
         $mtime = filemtime($path);
         $first = $service->fromUploadedFile(new UploadedFile($path, 'a.png', 'image/png', null, true));
 
-        file_put_contents($path, $this->pngBytes(200, 300));
+        file_put_contents($path, $this->imageBytes(200, 300));
         touch($path, (int) $mtime);
         clearstatcache(true, $path);
         $second = $service->fromUploadedFile(new UploadedFile($path, 'b.png', 'image/png', null, true));

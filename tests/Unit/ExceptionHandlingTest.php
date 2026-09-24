@@ -22,37 +22,10 @@ class ExceptionHandlingTest extends TestCase
 {
     protected ImageDimensionsService $service;
 
-    protected string $testFilesPath;
-
     protected function setUp(): void
     {
         parent::setUp();
         $this->service = new ImageDimensionsService;
-        $this->testFilesPath = sys_get_temp_dir().'/image-dimensions-tests-'.uniqid();
-
-        if (! is_dir($this->testFilesPath)) {
-            mkdir($this->testFilesPath, 0777, true);
-        }
-
-        $img = imagecreate(10, 10);
-        imagecolorallocate($img, 255, 255, 255);
-        imagepng($img, $this->testFilesPath.'/image.png');
-        imagedestroy($img);
-    }
-
-    protected function tearDown(): void
-    {
-        $files = glob($this->testFilesPath.'/*');
-        foreach ($files as $file) {
-            if (is_file($file)) {
-                @unlink($file);
-            }
-        }
-        if (is_dir($this->testFilesPath)) {
-            @rmdir($this->testFilesPath);
-        }
-        Mockery::close();
-        parent::tearDown();
     }
 
     // --- Local File Exceptions ---
@@ -61,35 +34,24 @@ class ExceptionHandlingTest extends TestCase
     public function it_throws_for_non_existent_local_file(): void
     {
         $this->expectException(FileNotFoundException::class);
-        $this->service->fromLocal($this->testFilesPath.'/non-existent.jpg');
+        $this->service->fromLocal($this->tempPath.'/non-existent.jpg');
     }
 
     #[Test]
     public function it_throws_for_unreadable_local_file(): void
     {
-        if (function_exists('posix_geteuid') && posix_geteuid() === 0) {
-            $this->markTestSkipped('File permission checks are ineffective when running as root.');
-        }
-
-        $path = $this->testFilesPath.'/unreadable.jpg';
-        touch($path);
-        chmod($path, 0000); // Make the file unreadable
+        $path = $this->createImage('unreadable.jpg', 10, 10, 'jpg');
+        $this->makeUnreadable($path);
 
         $this->expectException(InvalidImageException::class);
         $this->expectExceptionMessage('File is not readable');
-
-        try {
-            $this->service->fromLocal($path);
-        } finally {
-            chmod($path, 0644); // Restore permissions for proper cleaning
-        }
+        $this->service->fromLocal($path);
     }
 
     #[Test]
     public function it_throws_for_corrupted_image_file(): void
     {
-        $path = $this->testFilesPath.'/corrupted.jpg';
-        file_put_contents($path, 'this is not a valid image');
+        $path = $this->createFile('corrupted.jpg', 'this is not a valid image');
 
         $this->expectException(InvalidImageException::class);
         $this->service->fromLocal($path);
@@ -98,8 +60,7 @@ class ExceptionHandlingTest extends TestCase
     #[Test]
     public function it_throws_for_empty_local_file(): void
     {
-        $path = $this->testFilesPath.'/empty.png';
-        touch($path);
+        $path = $this->createFile('empty.png', '');
 
         $this->expectException(InvalidImageException::class);
         $this->expectExceptionMessage('File is empty');
@@ -218,20 +179,11 @@ class ExceptionHandlingTest extends TestCase
         $url = 'https://example.com/image.png';
         Http::fake([$url => Http::response('image data', 200)]);
 
-        $invalidDir = $this->testFilesPath.'/unwritable';
-        mkdir($invalidDir, 0444, true); // Read-only
-
-        Config::set('image-dimensions.temp_dir', $invalidDir);
+        Config::set('image-dimensions.temp_dir', $this->createReadOnlyDirectory('unwritable'));
         $serviceWithBadConfig = new ImageDimensionsService;
 
         $this->expectException(TemporaryFileException::class);
         $this->expectExceptionMessage('Could not create temporary file');
-
-        try {
-            $serviceWithBadConfig->fromUrl($url);
-        } finally {
-            chmod($invalidDir, 0777);
-            rmdir($invalidDir);
-        }
+        $serviceWithBadConfig->fromUrl($url);
     }
 }

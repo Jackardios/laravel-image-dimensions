@@ -14,38 +14,23 @@ use PHPUnit\Framework\Attributes\Test;
 use ReflectionMethod;
 
 /**
- * The rest of the suite relaxes the SSRF guard (via the
- * IMAGE_DIMENSIONS_URL_ALLOW_PRIVATE_HOSTS env var in phpunit.xml) so that
- * pipeline tests stay network-free. These tests deliberately exercise the
- * defaults the package actually ships with.
+ * The rest of the suite relaxes the SSRF guard (see TestCase::defineEnvironment())
+ * so that pipeline tests stay network-free. These tests deliberately exercise
+ * the defaults the package actually ships with.
  */
 class SecureDefaultsTest extends TestCase
 {
     #[Test]
     public function the_shipped_config_defaults_to_blocking_private_hosts(): void
     {
-        // phpunit.xml sets this var to keep the rest of the suite network-free;
-        // clear it so the config file's own default is what gets evaluated.
-        $restore = $_ENV['IMAGE_DIMENSIONS_URL_ALLOW_PRIVATE_HOSTS'] ?? null;
-        unset($_ENV['IMAGE_DIMENSIONS_URL_ALLOW_PRIVATE_HOSTS'], $_SERVER['IMAGE_DIMENSIONS_URL_ALLOW_PRIVATE_HOSTS']);
-        putenv('IMAGE_DIMENSIONS_URL_ALLOW_PRIVATE_HOSTS');
+        $config = require __DIR__.'/../../config/image-dimensions.php';
 
-        try {
-            $config = require __DIR__.'/../../config/image-dimensions.php';
-
-            $this->assertFalse(
-                $config['url']['allow_private_hosts'],
-                'the shipped config must block private hosts by default'
-            );
-            $this->assertSame(5, $config['url']['max_redirects']);
-            $this->assertSame([], $config['url']['allowed_hosts']);
-        } finally {
-            if ($restore !== null) {
-                $_ENV['IMAGE_DIMENSIONS_URL_ALLOW_PRIVATE_HOSTS'] = $restore;
-                $_SERVER['IMAGE_DIMENSIONS_URL_ALLOW_PRIVATE_HOSTS'] = $restore;
-                putenv('IMAGE_DIMENSIONS_URL_ALLOW_PRIVATE_HOSTS='.$restore);
-            }
-        }
+        $this->assertFalse(
+            $config['url']['allow_private_hosts'],
+            'the shipped config must block private hosts by default'
+        );
+        $this->assertSame(5, $config['url']['max_redirects']);
+        $this->assertSame([], $config['url']['allowed_hosts']);
     }
 
     /**

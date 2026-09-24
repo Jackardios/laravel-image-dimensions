@@ -5,17 +5,13 @@ declare(strict_types=1);
 namespace Jackardios\ImageDimensions\Tests\Feature;
 
 use GuzzleHttp\Psr7\Utils;
-use Illuminate\Filesystem\FilesystemAdapter as IlluminateFilesystemAdapter;
 use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Storage;
 use Jackardios\ImageDimensions\Exceptions\FileTooLargeException;
 use Jackardios\ImageDimensions\Exceptions\InvalidImageException;
 use Jackardios\ImageDimensions\Exceptions\UrlAccessException;
 use Jackardios\ImageDimensions\Exceptions\UrlNotAllowedException;
 use Jackardios\ImageDimensions\ImageDimensionsService;
 use Jackardios\ImageDimensions\Tests\TestCase;
-use League\Flysystem\Filesystem as Flysystem;
-use League\Flysystem\InMemory\InMemoryFilesystemAdapter;
 use PHPUnit\Framework\Attributes\Test;
 
 class RemotePipelineTest extends TestCase
@@ -45,24 +41,13 @@ class RemotePipelineTest extends TestCase
         ], $overrides));
     }
 
-    private function pngBytes(int $width, int $height): string
-    {
-        $image = imagecreatetruecolor($width, $height);
-        ob_start();
-        imagepng($image);
-        $data = (string) ob_get_clean();
-        imagedestroy($image);
-
-        return $data;
-    }
-
     // --- URL pipeline ---
 
     #[Test]
     public function it_reads_dimensions_from_a_url(): void
     {
         $url = 'https://example.com/image.png';
-        Http::fake([$url => Http::response(Utils::streamFor($this->pngBytes(120, 80)), 200)]);
+        Http::fake([$url => Http::response(Utils::streamFor($this->imageBytes(120, 80)), 200)]);
 
         $this->assertDimensions(120, 80, $this->service->fromUrl($url));
     }
@@ -85,7 +70,7 @@ class RemotePipelineTest extends TestCase
         $service = $this->makeService(['remote_read_bytes' => 8192]);
 
         $url = 'https://example.com/big.png';
-        Http::fake([$url => Http::response(Utils::streamFor($this->pngBytes(1000, 1000)), 200)]);
+        Http::fake([$url => Http::response(Utils::streamFor($this->imageBytes(1000, 1000)), 200)]);
 
         $service->fromUrl($url);
 
@@ -207,20 +192,11 @@ class RemotePipelineTest extends TestCase
 
     // --- Storage pipeline (genuine non-local disk) ---
 
-    private function fakeInMemoryDisk(string $name): IlluminateFilesystemAdapter
-    {
-        $adapter = new InMemoryFilesystemAdapter;
-        $disk = new IlluminateFilesystemAdapter(new Flysystem($adapter), $adapter);
-        Storage::set($name, $disk);
-
-        return $disk;
-    }
-
     #[Test]
     public function it_reads_dimensions_from_a_non_local_storage_disk(): void
     {
-        $disk = $this->fakeInMemoryDisk('mem');
-        $disk->put('photos/pic.png', $this->pngBytes(300, 150));
+        $disk = $this->useInMemoryDisk('mem');
+        $disk->put('photos/pic.png', $this->imageBytes(300, 150));
 
         $this->assertDimensions(300, 150, $this->service->fromStorage('mem', 'photos/pic.png'));
     }
@@ -230,8 +206,8 @@ class RemotePipelineTest extends TestCase
     {
         $service = $this->makeService(['remote_read_bytes' => 8192]);
 
-        $disk = $this->fakeInMemoryDisk('mem');
-        $disk->put('photos/big.png', $this->pngBytes(900, 700));
+        $disk = $this->useInMemoryDisk('mem');
+        $disk->put('photos/big.png', $this->imageBytes(900, 700));
 
         $this->assertDimensions(900, 700, $service->fromStorage('mem', 'photos/big.png'));
     }
@@ -239,7 +215,7 @@ class RemotePipelineTest extends TestCase
     #[Test]
     public function it_throws_invalid_image_for_a_non_image_on_a_non_local_disk(): void
     {
-        $disk = $this->fakeInMemoryDisk('mem');
+        $disk = $this->useInMemoryDisk('mem');
         $disk->put('notes.txt', 'just some text, definitely not an image');
 
         $this->expectException(InvalidImageException::class);

@@ -14,7 +14,7 @@ class TemporaryFileTest extends TestCase
     #[Test]
     public function it_creates_a_file_and_removes_it_on_destruction(): void
     {
-        $temp = new TemporaryFile(sys_get_temp_dir());
+        $temp = new TemporaryFile($this->tempPath);
         $path = $temp->path();
 
         $this->assertFileExists($path);
@@ -27,7 +27,7 @@ class TemporaryFileTest extends TestCase
     #[Test]
     public function it_appends_from_a_stream_up_to_the_byte_limit(): void
     {
-        $temp = new TemporaryFile(sys_get_temp_dir());
+        $temp = new TemporaryFile($this->tempPath);
 
         $stream = fopen('php://memory', 'r+');
         fwrite($stream, str_repeat('a', 100));
@@ -44,7 +44,7 @@ class TemporaryFileTest extends TestCase
     #[Test]
     public function it_continues_appending_to_the_same_file(): void
     {
-        $temp = new TemporaryFile(sys_get_temp_dir());
+        $temp = new TemporaryFile($this->tempPath);
 
         $stream = fopen('php://memory', 'r+');
         fwrite($stream, 'hello world');
@@ -61,7 +61,7 @@ class TemporaryFileTest extends TestCase
     #[Test]
     public function it_reports_zero_bytes_for_an_empty_stream_without_throwing(): void
     {
-        $temp = new TemporaryFile(sys_get_temp_dir());
+        $temp = new TemporaryFile($this->tempPath);
 
         $stream = fopen('php://memory', 'r+');
         rewind($stream);
@@ -75,19 +75,9 @@ class TemporaryFileTest extends TestCase
     #[Test]
     public function it_throws_when_the_directory_is_not_writable(): void
     {
-        if (function_exists('posix_geteuid') && posix_geteuid() === 0) {
-            $this->markTestSkipped('Directory permission checks are ineffective when running as root.');
-        }
+        $directory = $this->createReadOnlyDirectory('read-only');
 
-        $dir = sys_get_temp_dir().'/imgdim_ro_'.uniqid();
-        mkdir($dir, 0555, true);
-
-        try {
-            $this->expectException(TemporaryFileException::class);
-            new TemporaryFile($dir);
-        } finally {
-            chmod($dir, 0777);
-            rmdir($dir);
-        }
+        $this->expectException(TemporaryFileException::class);
+        new TemporaryFile($directory);
     }
 }

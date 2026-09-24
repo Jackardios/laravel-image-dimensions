@@ -6,32 +6,18 @@ namespace Jackardios\ImageDimensions\Tests\Feature;
 
 use Illuminate\Support\Facades\Cache;
 use Jackardios\ImageDimensions\ImageDimensionsService;
-use Jackardios\ImageDimensions\Tests\Concerns\CreatesTestImages;
 use Jackardios\ImageDimensions\Tests\TestCase;
 use Mockery;
 use PHPUnit\Framework\Attributes\Test;
 
 class CacheBehaviorTest extends TestCase
 {
-    use CreatesTestImages;
-
-    private string $dir;
-
     private string $png;
 
     protected function setUp(): void
     {
         parent::setUp();
-        $this->dir = sys_get_temp_dir().'/imgdim_cache_'.uniqid();
-        mkdir($this->dir, 0777, true);
-        $this->png = $this->createImage($this->dir, 'pic.png', 40, 20);
-    }
-
-    protected function tearDown(): void
-    {
-        $this->cleanupCreatedFiles($this->dir);
-        Mockery::close();
-        parent::tearDown();
+        $this->png = $this->createImage('pic.png', 40, 20);
     }
 
     #[Test]
