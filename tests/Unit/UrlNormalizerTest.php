@@ -34,6 +34,7 @@ class UrlNormalizerTest extends TestCase
             'user info' => ['https://user:p@ss@example.com/a.png', 'https://user:p%40ss@example.com/a.png'],
             'IPv4 address' => ['http://203.0.113.9/a.png', 'http://203.0.113.9/a.png'],
             'IPv6 address' => ['http://[2001:DB8::1]:8080/a.png', 'http://[2001:db8::1]:8080/a.png'],
+            'IPv4-mapped IPv6 address' => ['http://[::ffff:1.2.3.4]/a.png', 'http://[::ffff:1.2.3.4]/a.png'],
             'surrounding whitespace' => [" \thttps://example.com/a.png\r\n", 'https://example.com/a.png'],
             'trailing dot' => ['https://example.com./a.png', 'https://example.com./a.png'],
         ];
@@ -79,6 +80,21 @@ class UrlNormalizerTest extends TestCase
     public function it_rejects_invalid_urls(string $url): void
     {
         $this->assertNull(UrlNormalizer::normalize($url));
+    }
+
+    /**
+     * Allowlist entries are normalized with normalizeHost() alone.
+     */
+    #[Test]
+    public function it_normalizes_a_host_on_its_own(): void
+    {
+        $this->assertSame('xn--e1afmkfd.xn--p1ai', UrlNormalizer::normalizeHost('Пример.РФ'));
+        $this->assertSame('[2001:db8::1]', UrlNormalizer::normalizeHost('[2001:DB8::1]'));
+        $this->assertSame('[::ffff:1.2.3.4]', UrlNormalizer::normalizeHost('[::ffff:1.2.3.4]'));
+
+        foreach (['[example.com]', '[::1', '[::1]x', '[]', 'exa mple.com'] as $invalid) {
+            $this->assertNull(UrlNormalizer::normalizeHost($invalid), $invalid);
+        }
     }
 
     #[Test]

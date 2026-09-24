@@ -182,6 +182,7 @@ class TryContractTest extends TestCase
             'string' => ['garbage'],
             'missing height' => [['width' => 5]],
             'zero width' => [['width' => 0, 'height' => 5]],
+            'zero height' => [['width' => 5, 'height' => 0]],
             'non-numeric' => [['width' => 'wide', 'height' => 'tall']],
             'object' => [new \stdClass],
         ];

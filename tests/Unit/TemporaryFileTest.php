@@ -81,6 +81,29 @@ class TemporaryFileTest extends TestCase
         new TemporaryFile($directory);
     }
 
+    /**
+     * A fatal error such as running out of memory skips destructors (an
+     * uncaught exception does not); the file is removed at shutdown.
+     */
+    #[Test]
+    public function a_fatal_error_does_not_leave_the_file_behind(): void
+    {
+        $script = sprintf(
+            'require %s; $file = new %s(%s); echo count(glob(%s)); ini_set("memory_limit", "32M"); str_repeat("x", 64 * 1048576);',
+            var_export(dirname(__DIR__, 2).'/vendor/autoload.php', true),
+            TemporaryFile::class,
+            var_export($this->tempPath, true),
+            var_export($this->tempPath.DIRECTORY_SEPARATOR.'imgdim_*', true),
+        );
+
+        $output = [];
+        exec(escapeshellarg(PHP_BINARY).' -d display_errors=0 -r '.escapeshellarg($script), $output, $exitCode);
+
+        $this->assertSame(['1'], $output, 'The file must have been created.');
+        $this->assertSame(255, $exitCode, 'The script must end in a fatal error.');
+        $this->assertSame([], glob($this->tempPath.DIRECTORY_SEPARATOR.'imgdim_*'));
+    }
+
     #[Test]
     public function it_throws_when_the_directory_does_not_exist(): void
     {

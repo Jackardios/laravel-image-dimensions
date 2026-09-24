@@ -55,13 +55,19 @@ class ImageDimensionsIntegrationTest extends TestCase
         ImageDimensions::fromContents(str_repeat('x', 10001));
     }
 
+    /**
+     * A local disk is read as a local file: in place, and cached like one.
+     */
     #[Test]
     public function it_reads_a_file_on_a_local_disk(): void
     {
         Config::set('filesystems.disks.images', ['driver' => 'local', 'root' => $this->tempPath.'/disk']);
         $this->app['filesystem']->disk('images')->put('photos/image.png', $this->imageBytes(800, 600));
+        $keys = $this->recordCacheWrites();
 
         $this->assertDimensions(800, 600, ImageDimensions::fromStorage('images', 'photos/image.png'));
+        $this->assertCount(1, $keys);
+        $this->assertStringStartsWith('image_dimensions:v2:local:', $keys[0]);
     }
 
     #[Test]

@@ -335,6 +335,32 @@ class SvgDimensionsTest extends TestCase
         $this->assertDimensions(10, 20, $service->fromLocal($this->createFile('exact.svg', $content)));
     }
 
+    /**
+     * The size of an SVG file is checked before it is read.
+     */
+    #[Test]
+    public function an_svg_file_over_the_limit_is_not_read(): void
+    {
+        $path = $this->createFile('huge.svg', '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="20">');
+        // 64 MB, without writing them (a sparse file where supported).
+        $handle = fopen($path, 'r+b');
+        ftruncate($handle, 64 * 1048576);
+        fclose($handle);
+        $service = new ImageDimensionsService(['enable_cache' => false, 'svg' => ['max_file_size' => 1024]]);
+
+        memory_reset_peak_usage();
+        $before = memory_get_peak_usage();
+
+        try {
+            $service->fromLocal($path);
+            $this->fail('Expected a FileTooLargeException.');
+        } catch (FileTooLargeException $e) {
+            $this->assertStringContainsString('SVG file is too large (max 1024 bytes)', $e->getMessage());
+        }
+
+        $this->assertLessThan(8 * 1048576, memory_get_peak_usage() - $before);
+    }
+
     #[Test]
     public function it_names_the_limit_when_an_svg_is_too_large(): void
     {

@@ -162,13 +162,26 @@ class UrlGuardTest extends TestCase
         }
     }
 
+    /**
+     * @return array<string, array{0: string, 1: string}>
+     */
+    public static function schemeProvider(): array
+    {
+        return [
+            'ftp' => ['ftp://8.8.8.8/image.png', 'ftp'],
+            'none' => ['//8.8.8.8/image.png', '(none)'],
+        ];
+    }
+
     #[Test]
-    public function it_rejects_non_http_schemes(): void
+    #[DataProvider('schemeProvider')]
+    public function it_rejects_non_http_schemes(string $url, string $named): void
     {
         $guard = new UrlGuard(allowPrivateHosts: false);
 
         $this->expectException(UrlNotAllowedException::class);
-        $guard->assertAllowed('ftp://8.8.8.8/image.png');
+        $this->expectExceptionMessage("URL scheme '{$named}' is not allowed");
+        $guard->assertAllowed($url);
     }
 
     #[Test]

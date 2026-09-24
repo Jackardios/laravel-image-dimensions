@@ -58,6 +58,8 @@ class DimensionsTest extends TestCase
 
         $square = new Dimensions(500, 500);
         $this->assertTrue($square->isSquare());
+        $this->assertFalse($square->isLandscape());
+        $this->assertFalse($square->isPortrait());
     }
 
     #[Test]

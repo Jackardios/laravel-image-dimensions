@@ -9,6 +9,7 @@ use Jackardios\ImageDimensions\Exceptions\InvalidImageException;
 use Jackardios\ImageDimensions\ImageDimensionsService;
 use Jackardios\ImageDimensions\Tests\Support\CountingStream;
 use Jackardios\ImageDimensions\Tests\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Test;
 
 /**
@@ -53,6 +54,33 @@ class StreamReadingTest extends TestCase
 
         $this->assertDimensions(30, 20, $service->fromStream(CountingStream::open($this->imageBytes(30, 20))));
         $this->assertDimensions(30, 20, $service->fromStorage('mem', 'a.png'));
+    }
+
+    #[Test]
+    public function an_empty_stream_is_reported_as_empty(): void
+    {
+        $this->useInMemoryDisk('mem')->put('empty.png', '');
+
+        foreach ([fn () => $this->service()->fromStream(CountingStream::open('')), fn () => $this->service()->fromStorage('mem', 'empty.png')] as $read) {
+            try {
+                $read();
+                $this->fail('Expected an InvalidImageException.');
+            } catch (InvalidImageException $e) {
+                $this->assertStringContainsString('File is empty', $e->getMessage());
+            }
+        }
+    }
+
+    /**
+     * Markup goes to the package's SVG parser, never to getimagesize(),
+     * which reads SVG itself on PHP 8.5 but ignores units (2x1 here).
+     */
+    #[Test]
+    public function an_svg_stream_is_measured_by_the_svg_parser(): void
+    {
+        $svg = '<svg xmlns="http://www.w3.org/2000/svg" width="2in" height="1in"/>';
+
+        $this->assertDimensions(192, 96, $this->service()->fromStream(CountingStream::open($svg)));
     }
 
     #[Test]
@@ -108,6 +136,71 @@ class StreamReadingTest extends TestCase
         }
 
         $this->assertLessThanOrEqual(300001 + 8192, CountingStream::bytesRead($stream));
+    }
+
+    /**
+     * @return array<string, array{0: array<string, mixed>, 1: int, 2: string|null}>
+     */
+    public static function svgCapProvider(): array
+    {
+        return [
+            'at the SVG cap' => [['svg' => ['max_file_size' => 20000]], 20000, null],
+            'past the SVG cap' => [['svg' => ['max_file_size' => 20000]], 20001, 'SVG file is too large (max 20000 bytes)'],
+            'at the download cap' => [['max_download_bytes' => 20000], 20000, null],
+            'past the download cap' => [['max_download_bytes' => 20000], 20001, 'too large to download (max 20000 bytes)'],
+            // Either message would do; the SVG one names the stricter setting.
+            'past both, equal caps' => [['max_download_bytes' => 20000, 'svg' => ['max_file_size' => 20000]], 20001, 'SVG file is too large (max 20000 bytes)'],
+            'past the download cap, no SVG cap' => [['max_download_bytes' => 20000, 'svg' => ['max_file_size' => 0]], 20001, 'too large to download (max 20000 bytes)'],
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $config
+     */
+    #[Test]
+    #[DataProvider('svgCapProvider')]
+    public function an_svg_stream_is_held_to_the_stricter_cap(array $config, int $length, ?string $error): void
+    {
+        $service = $this->service(['remote_read_bytes' => 8192] + $config);
+        $svg = '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="34"><!--';
+        $svg .= str_repeat('x', $length - strlen($svg) - 9).'--></svg>';
+        $this->assertSame($length, strlen($svg));
+
+        if ($error !== null) {
+            $this->expectException(FileTooLargeException::class);
+            $this->expectExceptionMessage($error);
+        }
+
+        $this->assertDimensions(12, 34, $service->fromStream(CountingStream::open($svg)));
+    }
+
+    /**
+     * A stream that has nothing to deliver yet has not ended: it is waited
+     * for, as a socket or a pipe would be.
+     */
+    #[Test]
+    public function a_stream_that_falls_silent_for_a_moment_is_waited_for(): void
+    {
+        $stream = CountingStream::open($this->imageBytes(30, 20), silentFor: 0.05);
+
+        $this->assertDimensions(30, 20, $this->service()->fromStream($stream));
+    }
+
+    #[Test]
+    public function a_stream_that_stays_silent_is_given_up_on(): void
+    {
+        $stream = CountingStream::open($this->imageBytes(30, 20), silentFor: INF);
+        $started = microtime(true);
+
+        try {
+            $this->service()->fromStream($stream);
+            $this->fail('Expected an InvalidImageException.');
+        } catch (InvalidImageException $e) {
+            $this->assertStringContainsString('File is empty', $e->getMessage());
+        }
+
+        // About 250 ms of retries.
+        $this->assertLessThan(5.0, microtime(true) - $started);
     }
 
     #[Test]

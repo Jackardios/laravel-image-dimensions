@@ -54,8 +54,10 @@ class HeifDimensionsReaderTest extends TestCase
     public function it_ignores_what_is_not_heif(): void
     {
         $mp4 = self::box('ftyp', 'mp42'.pack('N', 0).'isommp42').self::box('mdat', 'x');
+        // The same boxes a HEIF image has, but not its brands.
+        $mp4WithMetadata = self::heif([self::ispe(300, 200)], [1 => [1]], majorBrand: 'mp42', compatibleBrands: 'isommp42');
 
-        foreach (['', 'ftyp', str_repeat("\0", 64), "\x89PNG\r\n\x1a\n".str_repeat("\0", 32), $mp4] as $bytes) {
+        foreach (['', 'ftyp', str_repeat("\0", 64), "\x89PNG\r\n\x1a\n".str_repeat("\0", 32), $mp4, $mp4WithMetadata] as $bytes) {
             $this->assertNull(HeifDimensionsReader::fromString($bytes));
             $this->assertNull($this->fromFile($bytes));
         }
@@ -100,10 +102,11 @@ class HeifDimensionsReaderTest extends TestCase
     #[DataProvider('boxVersionProvider')]
     public function it_reads_every_box_version(int $ipmaVersion, bool $wideIndexes, int $pitmVersion): void
     {
-        // Property 1 is unrelated, so a misread index shows.
+        // Item 5 comes first and item 7 has two properties, of which only the
+        // third one is its size, so a misread entry or index shows.
         $bytes = self::heif(
-            [self::ispe(1, 1), self::ispe(640, 480)],
-            [7 => [2]],
+            [self::box('free', ''), self::ispe(1, 1), self::ispe(640, 480)],
+            [5 => [2], 7 => [1, 3]],
             primaryItem: 7,
             ipmaVersion: $ipmaVersion,
             wideIndexes: $wideIndexes,
@@ -143,9 +146,11 @@ class HeifDimensionsReaderTest extends TestCase
     #[Test]
     public function the_essential_flag_is_not_part_of_the_index(): void
     {
-        $bytes = self::heif([self::ispe(1, 1), self::ispe(20, 10)], [1 => [2 | 0x80]]);
+        foreach ([false, true] as $wideIndexes) {
+            $bytes = self::heif([self::ispe(1, 1), self::ispe(2, 2), self::ispe(20, 10)], [1 => [3 | 0x80]], wideIndexes: $wideIndexes);
 
-        $this->assertSame(['width' => 20, 'height' => 10], HeifDimensionsReader::fromString($bytes));
+            $this->assertSame(['width' => 20, 'height' => 10], HeifDimensionsReader::fromString($bytes));
+        }
     }
 
     /**
@@ -184,6 +189,45 @@ class HeifDimensionsReaderTest extends TestCase
 
         $this->assertSame(['width' => 300, 'height' => 200], HeifDimensionsReader::fromString($bytes));
         $this->assertSame(['width' => 300, 'height' => 200], $this->fromFile($bytes));
+    }
+
+    #[Test]
+    public function it_reads_a_metadata_box_with_a_64_bit_size(): void
+    {
+        [$ftyp, $meta] = self::splitAfterFtyp(self::heif([self::ispe(300, 200)], [1 => [1]]));
+        $content = substr($meta, 8, unpack('N', $meta)[1] - 8);
+        $bytes = $ftyp.pack('N', 1).'meta'.pack('NN', 0, 16 + strlen($content)).$content;
+
+        $this->assertSame(['width' => 300, 'height' => 200], HeifDimensionsReader::fromString($bytes));
+        $this->assertSame(['width' => 300, 'height' => 200], $this->fromFile($bytes));
+    }
+
+    /**
+     * A box of 4 GB and 19 bytes, where the file is much shorter: whatever
+     * follows its first 19 bytes is inside it, not a box of its own.
+     */
+    #[Test]
+    public function it_does_not_look_inside_a_box_for_the_next_one(): void
+    {
+        [$ftyp, $meta] = self::splitAfterFtyp(self::heif([self::ispe(300, 200)], [1 => [1]]));
+        $bytes = $ftyp.pack('N', 1).'free'.pack('NN', 1, 16 + 3).'abc'.$meta;
+
+        $this->assertNull(HeifDimensionsReader::fromString($bytes));
+        $this->assertNull($this->fromFile($bytes));
+    }
+
+    #[Test]
+    public function it_rejects_a_size_that_does_not_fit_in_an_integer(): void
+    {
+        [$ftyp, $meta] = self::splitAfterFtyp(self::heif([self::ispe(300, 200)], [1 => [1]]));
+        $content = substr($meta, 8, unpack('N', $meta)[1] - 8);
+
+        foreach ([0x80000000, 0xFFFFFFFF] as $high) {
+            $bytes = $ftyp.pack('N', 1).'meta'.pack('NN', $high, 16 + strlen($content)).$content;
+
+            $this->assertNull(HeifDimensionsReader::fromString($bytes));
+            $this->assertNull($this->fromFile($bytes));
+        }
     }
 
     #[Test]
