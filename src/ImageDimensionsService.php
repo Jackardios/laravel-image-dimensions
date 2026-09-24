@@ -51,7 +51,7 @@ class ImageDimensionsService implements ImageDimensionsContract
 
     protected int $svgMaxFileSize;
 
-    /** @var array{timeout: int, connect_timeout: int, verify: bool} */
+    /** @var array{timeout: float|int, connect_timeout: float|int, verify: bool} */
     protected array $httpOptions;
 
     protected SvgDimensionsExtractor $svgExtractor;
@@ -67,29 +67,88 @@ class ImageDimensionsService implements ImageDimensionsContract
     {
         $config ??= config('image-dimensions', []);
 
-        $this->remoteReadBytes = max(8192, min(1048576, (int) ($config['remote_read_bytes'] ?? 131072))); // 8KB-1MB
-        $maxDownloadBytes = (int) ($config['max_download_bytes'] ?? 33554432);
+        // Values usually come from environment variables, as strings: an
+        // empty or unrecognized one gives the default rather than 0 or true
+        // (an empty IMAGE_DIMENSIONS_MAX_DOWNLOAD_BYTES used to lift the cap).
+        $http = is_array($config['http'] ?? null) ? $config['http'] : [];
+        $svg = is_array($config['svg'] ?? null) ? $config['svg'] : [];
+        $url = is_array($config['url'] ?? null) ? $config['url'] : [];
+
+        $this->remoteReadBytes = max(8192, min(1048576, self::intSetting($config['remote_read_bytes'] ?? null, 131072))); // 8KB-1MB
+        $maxDownloadBytes = self::intSetting($config['max_download_bytes'] ?? null, 33554432);
         // 0 means unlimited; otherwise never below the initial read size.
         $this->maxDownloadBytes = $maxDownloadBytes <= 0 ? 0 : max($maxDownloadBytes, $this->remoteReadBytes);
-        $this->tempDir = $config['temp_dir'] ?? sys_get_temp_dir();
-        $this->enableCache = (bool) ($config['enable_cache'] ?? true);
+        // Resolved here, not in the config file, where `config:cache` would
+        // fix the temp directory of the machine that built the cache.
+        $tempDir = $config['temp_dir'] ?? null;
+        $this->tempDir = is_string($tempDir) && $tempDir !== '' ? $tempDir : sys_get_temp_dir();
+        $this->enableCache = self::boolSetting($config['enable_cache'] ?? null, true);
         // null => cache forever; <= 0 => do not cache; otherwise, seconds.
-        $rawTtl = array_key_exists('cache_ttl', $config) ? $config['cache_ttl'] : 3600;
-        $this->cacheTtl = $rawTtl === null ? null : (int) $rawTtl;
-        $this->svgMaxFileSize = max(0, (int) ($config['svg']['max_file_size'] ?? 10485760));
+        $this->cacheTtl = array_key_exists('cache_ttl', $config) && $config['cache_ttl'] === null
+            ? null
+            : self::intSetting($config['cache_ttl'] ?? null, 3600);
+        $this->svgMaxFileSize = max(0, self::intSetting($svg['max_file_size'] ?? null, 10485760));
         $this->httpOptions = [
-            'timeout' => max(0, (int) ($config['http']['timeout'] ?? 60)),
-            'connect_timeout' => max(0, (int) ($config['http']['connect_timeout'] ?? 10)),
-            'verify' => (bool) ($config['http']['verify_ssl'] ?? true),
+            'timeout' => self::secondsSetting($http['timeout'] ?? null, 60),
+            'connect_timeout' => self::secondsSetting($http['connect_timeout'] ?? null, 10),
+            'verify' => self::boolSetting($http['verify_ssl'] ?? null, true),
         ];
         $this->svgExtractor = new SvgDimensionsExtractor;
 
-        $urlConfig = is_array($config['url'] ?? null) ? $config['url'] : [];
+        $allowedHosts = $url['allowed_hosts'] ?? [];
         $this->urlGuard = new UrlGuard(
-            (bool) ($urlConfig['allow_private_hosts'] ?? false),
-            is_array($urlConfig['allowed_hosts'] ?? null) ? array_values($urlConfig['allowed_hosts']) : [],
-            (int) ($urlConfig['max_redirects'] ?? 5),
+            self::boolSetting($url['allow_private_hosts'] ?? null, false),
+            // A comma-separated string, as the environment variable holds.
+            is_string($allowedHosts) ? explode(',', $allowedHosts) : (is_array($allowedHosts) ? array_values($allowedHosts) : []),
+            self::intSetting($url['max_redirects'] ?? null, 5),
         );
+    }
+
+    /**
+     * An integer setting: an integer or a numeric string, else the default.
+     */
+    private static function intSetting(mixed $value, int $default): int
+    {
+        if (is_int($value)) {
+            return $value;
+        }
+
+        if (! is_numeric($value) || ! is_finite((float) $value)) {
+            return $default;
+        }
+
+        // Clamped far beyond any sensible value, where the cast is defined.
+        return (int) max(-1e15, min(1e15, (float) $value));
+    }
+
+    /**
+     * A duration in seconds, fractions allowed; 0 disables the timeout.
+     */
+    private static function secondsSetting(mixed $value, int $default): float|int
+    {
+        if (is_int($value)) {
+            return max(0, $value);
+        }
+
+        return is_numeric($value) && is_finite((float) $value) ? max(0, (float) $value) : $default;
+    }
+
+    /**
+     * A boolean setting: a boolean, or "true"/"false", "1"/"0", "yes"/"no",
+     * "on"/"off". Anything else, including an empty string, gives the
+     * default. A plain cast would turn "off" and "no" into true.
+     */
+    private static function boolSetting(mixed $value, bool $default): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if ($value === null || $value === '') {
+            return $default;
+        }
+
+        return filter_var($value, FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) ?? $default;
     }
 
     /**

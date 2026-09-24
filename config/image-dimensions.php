@@ -36,11 +36,12 @@ return [
     |--------------------------------------------------------------------------
     |
     | The directory where temporary files will be created when processing
-    | remote images. Defaults to the system's temp directory.
+    | remote images. When null or empty, the system's temp directory, as
+    | sys_get_temp_dir() reports it at run time.
     | The directory must exist and be writable.
     |
     */
-    'temp_dir' => env('IMAGE_DIMENSIONS_TEMP_DIR', sys_get_temp_dir()),
+    'temp_dir' => env('IMAGE_DIMENSIONS_TEMP_DIR'),
 
     /*
     |--------------------------------------------------------------------------
