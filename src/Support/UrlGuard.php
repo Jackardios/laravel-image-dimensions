@@ -57,9 +57,12 @@ final class UrlGuard
      * @var list<array{0: string, 1: int}>
      */
     private const BLOCKED_V6 = [
-        ['::', 96],             // unspecified, loopback, IPv4-compatible (deprecated)
-        ['::ffff:0:0:0', 96],   // IPv4-translated (SIIT)
-        ['64:ff9b:1::', 48],    // local-use IPv4/IPv6 translation
+        // Reserved by the IETF: unspecified, loopback, IPv4-compatible
+        // (deprecated) and -translated (SIIT), local-use IPv4/IPv6
+        // translation (64:ff9b:1::/48) and unassigned space. Mapped and
+        // NAT64 (64:ff9b::/96) addresses are judged by their IPv4 address
+        // before this list is consulted.
+        ['::', 8],
         ['100::', 64],          // discard-only
         ['2001::', 23],         // IETF protocol assignments: Teredo, ORCHID, ...
         ['2001:db8::', 32],     // documentation

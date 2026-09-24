@@ -62,6 +62,12 @@ class UrlGuardTest extends TestCase
             'ipv4-mapped loopback, long form' => ['0:0:0:0:0:FFFF:7F00:0001'],
             'ipv4-translated (SIIT) metadata' => ['::ffff:0:a9fe:a9fe'],
             'ipv6 unspecified' => ['::'],
+            // The rest of ::/8 is reserved too, whatever IPv4 address its
+            // last bits spell; only the mapped and NAT64 prefixes carry one.
+            'reserved ::/8' => ['::1:a00:1'],
+            'reserved ::/8 spelling a public ipv4' => ['::1:808:808'],
+            'nat64 prefix, but not /96' => ['64:ff9b::1:808:808'],
+            'nat64 /32 outside the assigned blocks' => ['64:ff9b:0:1::808:808'],
             'local-use nat64' => ['64:ff9b:1::a00:1'],
             'orchid' => ['2001:10::1'],
             'orchid v2' => ['2001:20::1'],
