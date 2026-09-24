@@ -538,13 +538,19 @@ class ImageDimensionsService implements ImageDimensionsContract
     {
         try {
             $response = Http::withHeaders(['Accept-Encoding' => 'identity'])->withOptions($options)->get($url);
-        } catch (TransferStopped $stopped) {
-            return $stopped->dimensions;
-        } catch (ImageDimensionsException $e) {
-            // A size cap was hit mid-transfer, or a redirect hop pointed at a
-            // disallowed host.
-            throw $e;
         } catch (Throwable $e) {
+            $own = self::ownException($e);
+
+            if ($own instanceof TransferStopped) {
+                return $own->dimensions;
+            }
+
+            if ($own !== null) {
+                // A size cap was hit mid-transfer, or a redirect hop pointed
+                // at a disallowed host.
+                throw $own;
+            }
+
             if ($e instanceof StrayRequestException) {
                 // A test that forgot to fake this URL; not a package failure.
                 throw $e;
@@ -576,6 +582,22 @@ class ImageDimensionsService implements ImageDimensionsContract
         }
 
         return $this->analyzeFile($temp->path(), UrlRedactor::redact($url));
+    }
+
+    /**
+     * What this package threw from a transfer callback. Guzzle 7 lets it
+     * through; Guzzle 8 wraps it (a RequestException for `progress`, a
+     * ResponseException for `on_headers`), and Laravel may wrap that again.
+     */
+    private static function ownException(Throwable $e): TransferStopped|ImageDimensionsException|null
+    {
+        for ($cause = $e; $cause !== null; $cause = $cause->getPrevious()) {
+            if ($cause instanceof TransferStopped || $cause instanceof ImageDimensionsException) {
+                return $cause;
+            }
+        }
+
+        return null;
     }
 
     /**

@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Http;
 use Jackardios\ImageDimensions\Exceptions\FileTooLargeException;
 use Jackardios\ImageDimensions\Exceptions\InvalidImageException;
 use Jackardios\ImageDimensions\Exceptions\UrlAccessException;
+use Jackardios\ImageDimensions\Exceptions\UrlNotAllowedException;
 use Jackardios\ImageDimensions\ImageDimensionsService;
 use Jackardios\ImageDimensions\Tests\Support\LocalHttpServer;
 use Jackardios\ImageDimensions\Tests\TestCase;
@@ -175,6 +176,17 @@ class UrlTransferTest extends TestCase
     public function it_measures_the_redirect_target_not_the_redirect_body(): void
     {
         $this->assertDimensions(33, 44, $this->service()->fromUrl(self::$server->url('/redirect')));
+    }
+
+    #[Test]
+    public function a_redirect_to_a_host_that_is_not_allowed_is_refused(): void
+    {
+        $service = $this->service(['url' => ['allowed_hosts' => ['127.0.0.1']]]);
+        $target = str_replace('127.0.0.1', 'localhost', self::$server->url('/png'));
+
+        $this->expectException(UrlNotAllowedException::class);
+        $this->expectExceptionMessage("Host 'localhost' is not in the configured allowlist.");
+        $service->fromUrl(self::$server->url('/redirect?to='.rawurlencode($target)));
     }
 
     #[Test]
