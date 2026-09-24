@@ -88,16 +88,19 @@ class TemporaryFileTest extends TestCase
     #[Test]
     public function a_fatal_error_does_not_leave_the_file_behind(): void
     {
-        $script = sprintf(
-            'require %s; $file = new %s(%s); echo count(glob(%s)); ini_set("memory_limit", "32M"); str_repeat("x", 64 * 1048576);',
+        // A script file, not -r: escapeshellarg() on Windows turns double
+        // quotes into spaces.
+        $script = $this->tempPath.DIRECTORY_SEPARATOR.'fatal.php';
+        file_put_contents($script, sprintf(
+            '<?php require %s; $file = new %s(%s); echo count(glob(%s)); ini_set("memory_limit", "32M"); str_repeat("x", 64 * 1048576);',
             var_export(dirname(__DIR__, 2).'/vendor/autoload.php', true),
             TemporaryFile::class,
             var_export($this->tempPath, true),
             var_export($this->tempPath.DIRECTORY_SEPARATOR.'imgdim_*', true),
-        );
+        ));
 
         $output = [];
-        exec(escapeshellarg(PHP_BINARY).' -d display_errors=0 -r '.escapeshellarg($script), $output, $exitCode);
+        exec(escapeshellarg(PHP_BINARY).' -d display_errors=0 -d log_errors=0 '.escapeshellarg($script), $output, $exitCode);
 
         $this->assertSame(['1'], $output, 'The file must have been created.');
         $this->assertSame(255, $exitCode, 'The script must end in a fatal error.');
