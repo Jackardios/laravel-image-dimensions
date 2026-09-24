@@ -166,6 +166,17 @@ class UrlGuardTest extends TestCase
     }
 
     #[Test]
+    public function a_url_without_a_host_is_reported_without_its_secrets(): void
+    {
+        try {
+            (new UrlGuard)->assertAllowed('https:/a.png?token=hunter2');
+            $this->fail('Expected a UrlNotAllowedException.');
+        } catch (UrlNotAllowedException $e) {
+            $this->assertSame('Could not determine a host for URL: https:/a.png?token=***', $e->getMessage());
+        }
+    }
+
+    #[Test]
     public function an_allowlist_entry_matches_the_punycode_of_an_internationalized_host(): void
     {
         $guard = new UrlGuard(allowPrivateHosts: true, allowedHosts: ['Пример.РФ']);

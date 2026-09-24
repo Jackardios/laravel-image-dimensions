@@ -25,6 +25,7 @@ use Jackardios\ImageDimensions\Support\TemporaryFile;
 use Jackardios\ImageDimensions\Support\TransferStopped;
 use Jackardios\ImageDimensions\Support\UrlGuard;
 use Jackardios\ImageDimensions\Support\UrlNormalizer;
+use Jackardios\ImageDimensions\Support\UrlRedactor;
 use League\Flysystem\Local\LocalFilesystemAdapter;
 use League\Flysystem\PathTraversalDetected;
 use Psr\Http\Message\ResponseInterface;
@@ -209,7 +210,7 @@ class ImageDimensionsService implements ImageDimensionsContract
         // Checked, cached and fetched in this one form.
         $normalized = UrlNormalizer::normalize($url);
         if ($normalized === null) {
-            throw new InvalidImageException('Invalid URL provided: '.trim($url));
+            throw new InvalidImageException('Invalid URL provided: '.UrlRedactor::redact(trim($url)));
         }
 
         $url = $normalized;
@@ -596,7 +597,7 @@ class ImageDimensionsService implements ImageDimensionsContract
             throw FileTooLargeException::forDownload($limit);
         }
 
-        return $this->analyzeFile($temp->path(), $url);
+        return $this->analyzeFile($temp->path(), UrlRedactor::redact($url));
     }
 
     /**

@@ -233,6 +233,34 @@ class UrlTransferTest extends TestCase
     }
 
     #[Test]
+    public function error_messages_do_not_reveal_secrets_in_the_url(): void
+    {
+        $secretUrl = static fn (string $path): string => str_replace('http://', 'http://user:hunter2@', self::$server->url($path)).'&token=hunter2#hunter2';
+
+        $messages = [];
+        foreach (['/missing?x=1', '/stream?size=10', '/slow-headers?x=1'] as $path) {
+            try {
+                $this->service(['http' => ['timeout' => 1]])->fromUrl($secretUrl($path));
+                $this->fail("Expected {$path} to fail.");
+            } catch (UrlAccessException|InvalidImageException $e) {
+                $messages[] = $e->getMessage();
+            }
+        }
+
+        try {
+            $this->service()->fromUrl('https://user:hunter2@exa mple.com/?token=hunter2');
+        } catch (InvalidImageException $e) {
+            $messages[] = $e->getMessage();
+        }
+
+        $this->assertCount(4, $messages);
+        foreach ($messages as $message) {
+            $this->assertStringNotContainsString('hunter2', $message);
+            $this->assertStringContainsString('token=***', $message);
+        }
+    }
+
+    #[Test]
     public function it_leaves_no_temporary_file_behind(): void
     {
         $service = $this->service(['temp_dir' => $this->tempPath]);
