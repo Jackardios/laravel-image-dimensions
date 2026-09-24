@@ -50,6 +50,27 @@ class UrlGuardTest extends TestCase
             'ipv6 documentation' => ['2001:db8::1'],
             'ipv6 discard' => ['100::1'],
             'ipv6 teredo' => ['2001:0::1'],
+            // Allowed by the PHP 8.2 filter tables, or by every version's.
+            'ipv4-compatible loopback' => ['::127.0.0.1'],
+            'ipv4-compatible loopback, hex' => ['::7f00:1'],
+            'ipv4-compatible metadata, hex' => ['::a9fe:a9fe'],
+            'ipv4-mapped loopback, hex' => ['::ffff:7f00:1'],
+            'ipv4-mapped loopback, long form' => ['0:0:0:0:0:FFFF:7F00:0001'],
+            'ipv4-translated (SIIT) metadata' => ['::ffff:0:a9fe:a9fe'],
+            'ipv6 unspecified' => ['::'],
+            'local-use nat64' => ['64:ff9b:1::a00:1'],
+            'orchid' => ['2001:10::1'],
+            'orchid v2' => ['2001:20::1'],
+            'benchmarking v6' => ['2001:2::1'],
+            'drip' => ['2001:30::1'],
+            'documentation 3fff' => ['3fff::1'],
+            'srv6 sid' => ['5f00::1'],
+            'site-local' => ['fec0::1'],
+            'ipv6 multicast' => ['ff02::1'],
+            'ipv4 multicast' => ['224.0.0.1'],
+            'ipv4 broadcast' => ['255.255.255.255'],
+            '6to4 relay anycast' => ['192.88.99.1'],
+            'not an ip' => ['localhost'],
         ];
     }
 
@@ -74,7 +95,9 @@ class UrlGuardTest extends TestCase
             // The transition-prefix checks must not over-block: these tunnel a
             // PUBLIC IPv4 and stay reachable.
             '6to4 public v4' => ['2002:d83a:d54b::'],
+            '6to4 public v4, another' => ['2002:808:808::'],
             'nat64 public v4' => ['64:ff9b::d83a:d54b'],
+            'ipv4-mapped public' => ['::ffff:8.8.8.8'],
         ];
     }
 
@@ -140,6 +163,93 @@ class UrlGuardTest extends TestCase
 
         $guard->assertAllowed('https://cdn.example.com/image.png');
         $this->addToAssertionCount(1);
+    }
+
+    #[Test]
+    public function it_accepts_the_scheme_in_any_case(): void
+    {
+        $guard = new UrlGuard(allowPrivateHosts: false);
+
+        $guard->assertAllowed('HTTPS://8.8.8.8/image.png');
+        $guard->assertAllowed('Http://8.8.8.8/image.png');
+        $this->addToAssertionCount(1);
+    }
+
+    #[Test]
+    public function it_rejects_a_host_that_resolves_to_a_private_address_without_naming_it(): void
+    {
+        $guard = new UrlGuard(allowPrivateHosts: false, resolver: fn (string $host) => ['8.8.8.8', '10.1.2.3']);
+
+        try {
+            $guard->assertAllowed('https://internal.example.com/image.png');
+            $this->fail('Expected a UrlNotAllowedException.');
+        } catch (UrlNotAllowedException $e) {
+            $this->assertStringContainsString("'internal.example.com'", $e->getMessage());
+            $this->assertStringNotContainsString('10.1.2.3', $e->getMessage());
+        }
+    }
+
+    #[Test]
+    public function it_allows_a_host_that_resolves_only_to_public_addresses(): void
+    {
+        $resolved = [];
+        $guard = new UrlGuard(allowPrivateHosts: false, resolver: function (string $host) use (&$resolved) {
+            $resolved[] = $host;
+
+            return ['93.184.215.14', '2606:2800:21f:cb07:6820:80da:af6b:8b2c'];
+        });
+
+        $guard->assertAllowed('https://Example.COM/image.png');
+
+        $this->assertSame(['example.com'], $resolved);
+    }
+
+    #[Test]
+    public function it_rejects_a_host_that_does_not_resolve(): void
+    {
+        $guard = new UrlGuard(allowPrivateHosts: false, resolver: fn (string $host) => []);
+
+        $this->expectException(UrlNotAllowedException::class);
+        $this->expectExceptionMessage('could not be resolved');
+        $guard->assertAllowed('https://nowhere.invalid/image.png');
+    }
+
+    /**
+     * Regression: resolutions were memoized per guard, and the guard lives
+     * as long as a queue or Octane worker, so a verdict outlived the DNS
+     * record it was based on.
+     */
+    #[Test]
+    public function it_resolves_the_host_again_on_every_check(): void
+    {
+        $answers = [['93.184.215.14'], ['127.0.0.1']];
+        $guard = new UrlGuard(allowPrivateHosts: false, resolver: function (string $host) use (&$answers) {
+            return array_shift($answers);
+        });
+
+        $guard->assertAllowed('https://example.com/a.png');
+
+        $this->expectException(UrlNotAllowedException::class);
+        $guard->assertAllowed('https://example.com/a.png');
+    }
+
+    #[Test]
+    public function without_resolving_it_checks_everything_but_dns(): void
+    {
+        $guard = new UrlGuard(allowPrivateHosts: false, allowedHosts: ['example.com', '127.0.0.1'], resolver: function () {
+            $this->fail('No DNS lookup expected.');
+        });
+
+        $guard->assertAllowed('https://example.com/a.png', resolve: false);
+
+        foreach (['ftp://example.com/a.png', 'https://other.example/a.png', 'http://127.0.0.1/a.png'] as $url) {
+            try {
+                $guard->assertAllowed($url, resolve: false);
+                $this->fail("Expected {$url} to be rejected.");
+            } catch (UrlNotAllowedException) {
+                $this->addToAssertionCount(1);
+            }
+        }
     }
 
     #[Test]

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Jackardios\ImageDimensions\Tests\Feature;
 
+use Closure;
+use Illuminate\Support\Facades\Http;
 use Jackardios\ImageDimensions\Contracts\ImageDimensions as ImageDimensionsContract;
 use Jackardios\ImageDimensions\Exceptions\UrlAccessException;
 use Jackardios\ImageDimensions\Exceptions\UrlNotAllowedException;
@@ -121,12 +123,75 @@ class SecureDefaultsTest extends TestCase
     }
 
     #[Test]
-    public function the_guard_memoizes_resolution_for_literal_addresses_without_dns(): void
+    public function a_literal_address_is_judged_without_dns(): void
     {
-        $guard = new UrlGuard(allowPrivateHosts: false);
+        $guard = new UrlGuard(allowPrivateHosts: false, resolver: function () {
+            $this->fail('No DNS lookup expected for a literal address.');
+        });
 
-        // Literal IPs must never hit the resolver, so this stays network-free.
         $this->expectException(UrlNotAllowedException::class);
         $guard->assertAllowed('http://10.0.0.1/x.png');
+    }
+
+    /**
+     * Regression: fromUrl() resolved the host before looking in the cache,
+     * so every cache hit cost two DNS queries and failed while DNS was down.
+     */
+    #[Test]
+    public function a_cache_hit_needs_no_dns(): void
+    {
+        $lookups = 0;
+        $service = $this->serviceResolvingWith(function (string $host) use (&$lookups) {
+            $lookups++;
+
+            return $lookups === 1 ? ['93.184.215.14'] : [];
+        });
+
+        Http::fake(['https://example.com/*' => Http::response($this->imageBytes(3, 4))]);
+
+        $this->assertDimensions(3, 4, $service->fromUrl('https://example.com/a.png'));
+        $this->assertDimensions(3, 4, $service->fromUrl('https://example.com/a.png'));
+        $this->assertSame(1, $lookups);
+    }
+
+    #[Test]
+    public function a_fetch_is_refused_when_the_host_now_resolves_to_a_private_address(): void
+    {
+        $service = $this->serviceResolvingWith(fn (string $host) => ['169.254.169.254']);
+        Http::fake();
+
+        try {
+            $service->fromUrl('https://example.com/a.png');
+            $this->fail('Expected a UrlNotAllowedException.');
+        } catch (UrlNotAllowedException) {
+            Http::assertNothingSent();
+        }
+    }
+
+    #[Test]
+    public function the_scheme_may_be_upper_case(): void
+    {
+        $service = $this->serviceResolvingWith(fn (string $host) => ['93.184.215.14']);
+        Http::fake(['https://example.com/*' => Http::response($this->imageBytes(3, 4))]);
+
+        $this->assertDimensions(3, 4, $service->fromUrl('HTTPS://example.com/a.png'));
+    }
+
+    /**
+     * The SSRF guard with its defaults, but with a fake resolver so that
+     * no test depends on real DNS.
+     *
+     * @param  Closure(string): list<string>  $resolver
+     */
+    private function serviceResolvingWith(Closure $resolver): ImageDimensionsService
+    {
+        return new class($resolver) extends ImageDimensionsService
+        {
+            public function __construct(Closure $resolver)
+            {
+                parent::__construct(['cache_ttl' => 3600]);
+                $this->urlGuard = new UrlGuard(resolver: $resolver);
+            }
+        };
     }
 }

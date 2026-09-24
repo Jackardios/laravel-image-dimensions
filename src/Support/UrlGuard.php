@@ -12,8 +12,11 @@ use Jackardios\ImageDimensions\Exceptions\UrlNotAllowedException;
  *
  * By default a URL is rejected when its host resolves to a private, loopback,
  * link-local, or otherwise reserved IP address (IPv4 and IPv6, including
- * IPv4-mapped IPv6). This blocks access to cloud metadata endpoints
- * (169.254.169.254), localhost, and internal services.
+ * IPv4 addresses embedded in IPv6 ones). This blocks access to cloud metadata
+ * endpoints (169.254.169.254), localhost, and internal services.
+ *
+ * The host is resolved again on every fetch, never remembered, so a verdict
+ * cannot outlive the DNS record it was based on.
  *
  * Residual risk: DNS rebinding. The host is resolved here and again by the HTTP
  * client, so a hostile resolver could return a public address to this check and
@@ -23,29 +26,49 @@ use Jackardios\ImageDimensions\Exceptions\UrlNotAllowedException;
 final class UrlGuard
 {
     /**
-     * Reserved IPv4 ranges (CIDR) not covered by PHP's NO_PRIV_RANGE /
-     * NO_RES_RANGE filter flags but still unsafe to reach.
+     * IPv4 ranges that are never fetched (IANA special-purpose registry and
+     * multicast), listed explicitly so the verdict does not depend on the
+     * PHP version's filter tables.
      *
      * @var list<array{0: string, 1: int}>
      */
-    private const EXTRA_BLOCKED_V4 = [
-        ['100.64.0.0', 10], // RFC 6598 carrier-grade NAT
-        ['192.0.0.0', 24],  // RFC 6890 IETF protocol assignments
-        ['192.0.2.0', 24],  // RFC 5737 TEST-NET-1
-        ['198.18.0.0', 15], // RFC 2544 benchmarking
-        ['198.51.100.0', 24], // RFC 5737 TEST-NET-2
-        ['203.0.113.0', 24],  // RFC 5737 TEST-NET-3
+    private const BLOCKED_V4 = [
+        ['0.0.0.0', 8],        // "this network"
+        ['10.0.0.0', 8],       // private
+        ['100.64.0.0', 10],    // carrier-grade NAT
+        ['127.0.0.0', 8],      // loopback
+        ['169.254.0.0', 16],   // link-local, cloud metadata
+        ['172.16.0.0', 12],    // private
+        ['192.0.0.0', 24],     // IETF protocol assignments
+        ['192.0.2.0', 24],     // TEST-NET-1
+        ['192.88.99.0', 24],   // 6to4 relay anycast (deprecated)
+        ['192.168.0.0', 16],   // private
+        ['198.18.0.0', 15],    // benchmarking
+        ['198.51.100.0', 24],  // TEST-NET-2
+        ['203.0.113.0', 24],   // TEST-NET-3
+        ['224.0.0.0', 4],      // multicast
+        ['240.0.0.0', 4],      // reserved, broadcast
     ];
 
     /**
-     * Reserved IPv6 prefixes not covered by the filter flags.
+     * IPv6 prefixes that are never fetched. Addresses that carry an IPv4
+     * address (mapped, 6to4, NAT64) are judged by that address instead.
      *
      * @var list<array{0: string, 1: int}>
      */
-    private const EXTRA_BLOCKED_V6 = [
-        ['2001:db8::', 32], // RFC 3849 documentation
-        ['100::', 64],      // RFC 6666 discard-only
-        ['2001::', 32],     // RFC 4380 Teredo
+    private const BLOCKED_V6 = [
+        ['::', 96],             // unspecified, loopback, IPv4-compatible (deprecated)
+        ['::ffff:0:0:0', 96],   // IPv4-translated (SIIT)
+        ['64:ff9b:1::', 48],    // local-use IPv4/IPv6 translation
+        ['100::', 64],          // discard-only
+        ['2001::', 23],         // IETF protocol assignments: Teredo, ORCHID, ...
+        ['2001:db8::', 32],     // documentation
+        ['3fff::', 20],         // documentation
+        ['5f00::', 16],         // segment routing SIDs
+        ['fc00::', 7],          // unique local
+        ['fe80::', 10],         // link-local
+        ['fec0::', 10],         // site-local (deprecated)
+        ['ff00::', 8],          // multicast
     ];
 
     private bool $allowPrivateHosts;
@@ -55,26 +78,27 @@ final class UrlGuard
 
     private int $maxRedirects;
 
-    /**
-     * Per-instance memo of host => resolved IPs, so repeated lookups of the same
-     * host (cache hits, redirect chains, many images on one page) do not each
-     * pay two blocking DNS queries.
-     *
-     * @var array<string, list<string>>
-     */
-    private array $resolvedHosts = [];
+    /** @var Closure(string): list<string> */
+    private Closure $resolver;
 
     /**
      * @param  array<int, string>  $allowedHosts
+     * @param  (Closure(string): list<string>)|null  $resolver  Returns every IP address a host
+     *                                                          resolves to. Defaults to the system resolver.
      */
-    public function __construct(bool $allowPrivateHosts = false, array $allowedHosts = [], int $maxRedirects = 5)
-    {
+    public function __construct(
+        bool $allowPrivateHosts = false,
+        array $allowedHosts = [],
+        int $maxRedirects = 5,
+        ?Closure $resolver = null,
+    ) {
         $this->allowPrivateHosts = $allowPrivateHosts;
         $this->allowedHosts = array_values(array_filter(array_map(
             static fn ($host) => strtolower(trim((string) $host)),
             $allowedHosts
         ), static fn (string $host) => $host !== ''));
         $this->maxRedirects = max(0, $maxRedirects);
+        $this->resolver = $resolver ?? self::resolveWithSystemResolver(...);
     }
 
     public function maxRedirects(): int
@@ -85,9 +109,13 @@ final class UrlGuard
     /**
      * Assert that a URL may be fetched.
      *
+     * With $resolve = false only what needs no DNS lookup is checked: the
+     * scheme, the allowlist and a literal IP address. A URL must still pass
+     * the full check before it is actually fetched.
+     *
      * @throws UrlNotAllowedException
      */
-    public function assertAllowed(string $url): void
+    public function assertAllowed(string $url, bool $resolve = true): void
     {
         $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
         if ($scheme !== 'http' && $scheme !== 'https') {
@@ -99,24 +127,6 @@ final class UrlGuard
             throw UrlNotAllowedException::invalidHost($url);
         }
 
-        $this->assertHostAllowed($host);
-    }
-
-    /**
-     * A Guzzle `on_redirect` callback that re-validates every hop's target URI.
-     */
-    public function redirectGuard(): Closure
-    {
-        return function ($request, $response, $uri): void {
-            $this->assertAllowed((string) $uri);
-        };
-    }
-
-    /**
-     * @throws UrlNotAllowedException
-     */
-    private function assertHostAllowed(string $host): void
-    {
         $host = strtolower($host);
         $bareHost = trim($host, '[]'); // strip IPv6 literal brackets
 
@@ -131,164 +141,149 @@ final class UrlGuard
             return;
         }
 
-        foreach ($this->resolveIps($bareHost) as $ip) {
-            if ($this->isBlockedIp($ip)) {
-                throw UrlNotAllowedException::blockedAddress($host, $ip);
-            }
-        }
-    }
-
-    /**
-     * Resolve a host to every IP a later request might connect to.
-     *
-     * @return list<string>
-     *
-     * @throws UrlNotAllowedException
-     */
-    private function resolveIps(string $host): array
-    {
-        if (filter_var($host, FILTER_VALIDATE_IP) !== false) {
-            return [$host];
+        $isLiteral = filter_var($bareHost, FILTER_VALIDATE_IP) !== false;
+        if (! $isLiteral && ! $resolve) {
+            return;
         }
 
-        if (isset($this->resolvedHosts[$host])) {
-            return $this->resolvedHosts[$host];
-        }
-
-        $ips = [];
-
-        $v4 = @gethostbynamel($host);
-        if (is_array($v4)) {
-            $ips = $v4;
-        }
-
-        $records = @dns_get_record($host, DNS_AAAA);
-        if (is_array($records)) {
-            foreach ($records as $record) {
-                if (isset($record['ipv6']) && is_string($record['ipv6'])) {
-                    $ips[] = $record['ipv6'];
-                }
-            }
-        }
-
+        $ips = $isLiteral ? [$bareHost] : ($this->resolver)($bareHost);
         if ($ips === []) {
             // Unresolvable: cannot prove the target is safe, so refuse it.
-            // Not memoized — a transient DNS failure should not stick.
             throw UrlNotAllowedException::unresolvableHost($host);
         }
 
-        return $this->resolvedHosts[$host] = array_values(array_unique($ips));
+        foreach ($ips as $ip) {
+            if ($this->isBlockedIp($ip)) {
+                throw UrlNotAllowedException::blockedAddress($host);
+            }
+        }
     }
 
     /**
-     * Whether an IP address is in a private or reserved range.
+     * A Guzzle `on_redirect` callback that re-validates every hop's target URI.
+     */
+    public function redirectGuard(): Closure
+    {
+        return function ($request, $response, $uri): void {
+            $this->assertAllowed((string) $uri);
+        };
+    }
+
+    /**
+     * Whether an IP address is in a private, reserved or otherwise
+     * non-public range. Anything that is not an IP address is blocked.
      */
     public function isBlockedIp(string $ip): bool
     {
-        // IPv4-mapped IPv6 (::ffff:a.b.c.d) — evaluate the embedded IPv4.
-        if (stripos($ip, '::ffff:') === 0) {
-            $mapped = substr($ip, 7);
-            if (filter_var($mapped, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) {
-                return $this->isBlockedIp($mapped);
-            }
-        }
+        $packed = @inet_pton($ip);
 
-        // Transition mechanisms that tunnel an IPv4 destination inside an IPv6
-        // address: 6to4 (2002:V4ADDR::/48) and NAT64 (64:ff9b::/96). On a host
-        // with such a route these reach the embedded IPv4, so judge that.
-        $embedded = $this->embeddedIpv4($ip);
-        if ($embedded !== null && $this->isBlockedIp($embedded)) {
+        if ($packed === false) {
             return true;
         }
 
-        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
-            return true;
+        if (strlen($packed) === 4) {
+            return $this->isBlockedIpv4($packed);
         }
 
-        // Reserved IPv6 ranges the filter flags do not cover.
-        foreach (self::EXTRA_BLOCKED_V6 as $prefix) {
-            if ($this->ipv6InPrefix($ip, $prefix[0], $prefix[1])) {
+        $embedded = $this->embeddedIpv4($packed);
+        if ($embedded !== null) {
+            return $this->isBlockedIpv4($embedded);
+        }
+
+        foreach (self::BLOCKED_V6 as [$prefix, $bits]) {
+            if ($this->inPrefix($packed, (string) inet_pton($prefix), $bits)) {
                 return true;
             }
         }
 
-        // Extra IPv4 ranges the filter flags do not cover.
-        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) {
-            foreach (self::EXTRA_BLOCKED_V4 as [$subnet, $bits]) {
-                if ($this->ipv4InCidr($ip, $subnet, $bits)) {
-                    return true;
-                }
+        return ! $this->isGlobal((string) inet_ntop($packed));
+    }
+
+    private function isBlockedIpv4(string $packed): bool
+    {
+        foreach (self::BLOCKED_V4 as [$prefix, $bits]) {
+            if ($this->inPrefix($packed, (string) inet_pton($prefix), $bits)) {
+                return true;
             }
         }
 
-        return false;
+        return ! $this->isGlobal((string) inet_ntop($packed));
     }
 
     /**
-     * Extract the IPv4 address tunnelled inside a 6to4 or NAT64 IPv6 address,
-     * or null when the address carries none.
+     * PHP's own verdict, as a second opinion: its tables differ between
+     * versions, so it may only ever add to the explicit lists above.
      */
-    private function embeddedIpv4(string $ip): ?string
+    private function isGlobal(string $ip): bool
     {
-        $packed = @inet_pton($ip);
-        if ($packed === false || strlen($packed) !== 16) {
-            return null;
+        return filter_var(
+            $ip,
+            FILTER_VALIDATE_IP,
+            FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE | FILTER_FLAG_GLOBAL_RANGE
+        ) !== false;
+    }
+
+    /**
+     * The packed IPv4 address carried by an IPv4-mapped (::ffff:0:0/96), 6to4
+     * (2002::/16) or NAT64 (64:ff9b::/96) address, or null for any other.
+     * Such an address reaches the embedded IPv4 one, so it is judged by it.
+     */
+    private function embeddedIpv4(string $packed): ?string
+    {
+        if (str_starts_with($packed, str_repeat("\x00", 10)."\xff\xff")
+            || str_starts_with($packed, "\x00\x64\xff\x9b".str_repeat("\x00", 8))
+        ) {
+            return substr($packed, 12, 4);
         }
 
-        // 6to4: 2002:AABB:CCDD::/48 embeds A.B.C.D at bytes 2-5.
         if (str_starts_with($packed, "\x20\x02")) {
-            return inet_ntop(substr($packed, 2, 4)) ?: null;
-        }
-
-        // NAT64 well-known prefix 64:ff9b::/96 embeds the IPv4 in the last 4 bytes.
-        if (str_starts_with($packed, "\x00\x64\xff\x9b".str_repeat("\x00", 8))) {
-            return inet_ntop(substr($packed, 12, 4)) ?: null;
+            return substr($packed, 2, 4);
         }
 
         return null;
     }
 
     /**
-     * Whether an IPv6 address falls inside a prefix, compared bitwise on the
-     * packed form.
+     * Whether a packed address falls inside a packed prefix of the same
+     * family, compared bitwise.
      */
-    private function ipv6InPrefix(string $ip, string $prefix, int $bits): bool
+    private function inPrefix(string $packed, string $prefix, int $bits): bool
     {
-        $packedIp = @inet_pton($ip);
-        $packedPrefix = @inet_pton($prefix);
-
-        if ($packedIp === false || $packedPrefix === false
-            || strlen($packedIp) !== 16 || strlen($packedPrefix) !== 16
-        ) {
+        if (strlen($packed) !== strlen($prefix)) {
             return false;
         }
 
         $wholeBytes = intdiv($bits, 8);
-        $remainingBits = $bits % 8;
-
-        if ($wholeBytes > 0 && strncmp($packedIp, $packedPrefix, $wholeBytes) !== 0) {
+        if (strncmp($packed, $prefix, $wholeBytes) !== 0) {
             return false;
         }
 
+        $remainingBits = $bits % 8;
         if ($remainingBits === 0) {
             return true;
         }
 
-        $mask = 0xFF << (8 - $remainingBits) & 0xFF;
+        $mask = (0xFF << (8 - $remainingBits)) & 0xFF;
 
-        return (ord($packedIp[$wholeBytes]) & $mask) === (ord($packedPrefix[$wholeBytes]) & $mask);
+        return (ord($packed[$wholeBytes]) & $mask) === (ord($prefix[$wholeBytes]) & $mask);
     }
 
-    private function ipv4InCidr(string $ip, string $subnet, int $bits): bool
+    /**
+     * Every IPv4 and IPv6 address a host resolves to.
+     *
+     * @return list<string>
+     */
+    private static function resolveWithSystemResolver(string $host): array
     {
-        $ipLong = ip2long($ip);
-        $subnetLong = ip2long($subnet);
-        if ($ipLong === false || $subnetLong === false) {
-            return false;
+        $ips = @gethostbynamel($host) ?: [];
+
+        $records = @dns_get_record($host, DNS_AAAA);
+        foreach (is_array($records) ? $records : [] as $record) {
+            if (isset($record['ipv6']) && is_string($record['ipv6'])) {
+                $ips[] = $record['ipv6'];
+            }
         }
 
-        $mask = $bits === 0 ? 0 : (-1 << (32 - $bits));
-
-        return ($ipLong & $mask) === ($subnetLong & $mask);
+        return array_values(array_unique($ips));
     }
 }

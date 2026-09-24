@@ -134,17 +134,21 @@ class ImageDimensionsService implements ImageDimensionsContract
             throw new InvalidImageException("Invalid URL provided: {$url}");
         }
 
-        $scheme = parse_url($url, PHP_URL_SCHEME);
-        if (! in_array($scheme, ['http', 'https'], true)) {
+        $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
+        if ($scheme !== 'http' && $scheme !== 'https') {
             throw new InvalidImageException('Only HTTP and HTTPS URLs are supported');
         }
 
-        // SSRF guard: reject private/reserved hosts (unless explicitly allowed).
-        $this->urlGuard->assertAllowed($url);
+        // SSRF guard, first without DNS: a cache hit must not cost a lookup,
+        // nor fail when DNS is down.
+        $this->urlGuard->assertAllowed($url, resolve: false);
 
         $cacheKey = $this->getCacheKey('url', $url);
 
         return $this->getCachedOrCompute($cacheKey, function () use ($url) {
+            // Resolved on every fetch: an earlier verdict may be stale.
+            $this->urlGuard->assertAllowed($url);
+
             return $this->getDimensionsFromUrl($url);
         });
     }

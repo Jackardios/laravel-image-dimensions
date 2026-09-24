@@ -33,8 +33,12 @@ class UrlNotAllowedException extends UrlAccessException
         return new self("Host '{$host}' could not be resolved to an IP address.");
     }
 
-    public static function blockedAddress(string $host, string $ip): self
+    /**
+     * The address itself is left out: it would tell whoever supplied the
+     * URL what an internal host name resolves to.
+     */
+    public static function blockedAddress(string $host): self
     {
-        return new self("Host '{$host}' resolves to a blocked address ({$ip}).");
+        return new self("Host '{$host}' resolves to a private or reserved address.");
     }
 }
