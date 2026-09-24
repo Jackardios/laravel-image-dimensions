@@ -304,13 +304,14 @@ class ImageDimensionsServiceTest extends TestCase
         $path = $this->tempPath.'/test.png';
         $cacheKey = 'image_dimensions:v2:local:'.md5(realpath($path)).':'.filemtime($path);
 
-        Cache::shouldReceive('remember')
+        // A cached entry is returned without looking at the file.
+        Cache::shouldReceive('get')
             ->once()
-            ->with($cacheKey, 3600, \Mockery::type('callable'))
-            ->andReturn(['width' => 100, 'height' => 200]);
+            ->with($cacheKey)
+            ->andReturn(['width' => 11, 'height' => 22]);
 
         $result = $this->service->fromLocal($path);
-        $this->assertDimensions(100, 200, $result);
+        $this->assertDimensions(11, 22, $result);
     }
 
     #[Test]
@@ -319,7 +320,7 @@ class ImageDimensionsServiceTest extends TestCase
         config(['image-dimensions.enable_cache' => false]);
         $service = new ImageDimensionsService;
 
-        Cache::shouldReceive('remember')->never();
+        Cache::shouldReceive('get')->never();
 
         $result = $service->fromLocal($this->tempPath.'/test.png');
         $this->assertDimensions(100, 200, $result);

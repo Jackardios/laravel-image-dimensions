@@ -25,23 +25,24 @@ class CacheBehaviorTest extends TestCase
     {
         $service = new ImageDimensionsService(['enable_cache' => true, 'cache_ttl' => null]);
 
-        Cache::shouldReceive('rememberForever')
+        Cache::shouldReceive('get')->once()->andReturn(null);
+        Cache::shouldReceive('forever')
             ->once()
-            ->andReturn(['width' => 40, 'height' => 20]);
-        Cache::shouldReceive('remember')->never();
+            ->with(Mockery::type('string'), ['width' => 40, 'height' => 20]);
+        Cache::shouldReceive('put')->never();
 
         $this->assertDimensions(40, 20, $service->fromLocal($this->png));
     }
 
     #[Test]
-    public function a_positive_ttl_uses_remember(): void
+    public function a_positive_ttl_expires(): void
     {
         $service = new ImageDimensionsService(['enable_cache' => true, 'cache_ttl' => 120]);
 
-        Cache::shouldReceive('remember')
+        Cache::shouldReceive('get')->once()->andReturn(null);
+        Cache::shouldReceive('put')
             ->once()
-            ->with(Mockery::type('string'), 120, Mockery::type('callable'))
-            ->andReturn(['width' => 40, 'height' => 20]);
+            ->with(Mockery::type('string'), ['width' => 40, 'height' => 20], 120);
 
         $this->assertDimensions(40, 20, $service->fromLocal($this->png));
     }
@@ -51,8 +52,9 @@ class CacheBehaviorTest extends TestCase
     {
         $service = new ImageDimensionsService(['enable_cache' => true, 'cache_ttl' => 0]);
 
-        Cache::shouldReceive('remember')->never();
-        Cache::shouldReceive('rememberForever')->never();
+        Cache::shouldReceive('get')->never();
+        Cache::shouldReceive('put')->never();
+        Cache::shouldReceive('forever')->never();
 
         $this->assertDimensions(40, 20, $service->fromLocal($this->png));
     }

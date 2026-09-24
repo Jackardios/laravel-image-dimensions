@@ -24,6 +24,7 @@ use Jackardios\ImageDimensions\Support\TemporaryFile;
 use Jackardios\ImageDimensions\Support\TransferStopped;
 use Jackardios\ImageDimensions\Support\UrlGuard;
 use League\Flysystem\Local\LocalFilesystemAdapter;
+use League\Flysystem\PathTraversalDetected;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\StreamInterface;
 use SplFileInfo;
@@ -96,9 +97,7 @@ class ImageDimensionsService implements ImageDimensionsContract
     {
         $path = trim($path);
 
-        if ($path === '') {
-            throw new InvalidImageException('Path must be a non-empty string');
-        }
+        $this->assertValidPath($path);
 
         // Resolve real path to handle symlinks and relative paths
         $realPath = realpath($path);
@@ -170,9 +169,7 @@ class ImageDimensionsService implements ImageDimensionsContract
             throw new InvalidImageException('Disk name must be a non-empty string');
         }
 
-        if ($path === '') {
-            throw new InvalidImageException('Path must be a non-empty string');
-        }
+        $this->assertValidPath($path);
 
         try {
             $disk = Storage::disk($diskName);
@@ -180,7 +177,16 @@ class ImageDimensionsService implements ImageDimensionsContract
             throw new InvalidImageException("Storage disk '{$diskName}' does not exist");
         }
 
-        if (! $disk->exists($path)) {
+        try {
+            // Also rejects a path that would leave the disk's root.
+            $exists = $disk->exists($path);
+        } catch (PathTraversalDetected $e) {
+            throw new InvalidImageException("Invalid storage path: {$path}", 0, $e);
+        } catch (Throwable $e) {
+            throw StorageAccessException::couldNotAccess($path, $e);
+        }
+
+        if (! $exists) {
             throw FileNotFoundException::forStorage($diskName, $path);
         }
 
@@ -242,7 +248,7 @@ class ImageDimensionsService implements ImageDimensionsContract
      */
     public function fromStream($stream): Dimensions
     {
-        if (! is_resource($stream)) {
+        if (! is_resource($stream) || get_resource_type($stream) !== 'stream') {
             throw new InvalidImageException('A readable stream resource is required.');
         }
 
@@ -664,6 +670,21 @@ class ImageDimensionsService implements ImageDimensionsContract
     }
 
     /**
+     * @throws InvalidImageException
+     */
+    private function assertValidPath(string $path): void
+    {
+        if ($path === '') {
+            throw new InvalidImageException('Path must be a non-empty string');
+        }
+
+        // Filesystem functions throw a ValueError for these.
+        if (str_contains($path, "\0")) {
+            throw new InvalidImageException('Path must not contain NUL bytes');
+        }
+    }
+
+    /**
      * Determine image dimensions for a file already on the local filesystem.
      *
      * The format is taken from the contents, never from a file name or MIME
@@ -767,11 +788,25 @@ class ImageDimensionsService implements ImageDimensionsContract
             return Dimensions::fromArray($callback());
         }
 
-        // A null TTL means "cache indefinitely".
-        if ($this->cacheTtl === null) {
-            return Dimensions::fromArray(Cache::rememberForever($key, $callback));
+        // An entry that is not a pair of positive integers was not written
+        // by this package (or got corrupted): treat it as a miss.
+        $cached = Cache::get($key);
+        if (is_array($cached)
+            && is_int($cached['width'] ?? null) && $cached['width'] > 0
+            && is_int($cached['height'] ?? null) && $cached['height'] > 0
+        ) {
+            return new Dimensions($cached['width'], $cached['height']);
         }
 
-        return Dimensions::fromArray(Cache::remember($key, $this->cacheTtl, $callback));
+        $dimensions = $callback();
+
+        // A null TTL means "cache indefinitely".
+        if ($this->cacheTtl === null) {
+            Cache::forever($key, $dimensions);
+        } else {
+            Cache::put($key, $dimensions, $this->cacheTtl);
+        }
+
+        return Dimensions::fromArray($dimensions);
     }
 }
