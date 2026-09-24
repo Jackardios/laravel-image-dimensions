@@ -20,6 +20,7 @@ use Jackardios\ImageDimensions\Exceptions\TemporaryFileException;
 use Jackardios\ImageDimensions\Exceptions\UrlAccessException;
 use Jackardios\ImageDimensions\Exceptions\UrlNotAllowedException;
 use Jackardios\ImageDimensions\Support\HeifDimensionsReader;
+use Jackardios\ImageDimensions\Support\StreamReader;
 use Jackardios\ImageDimensions\Support\SvgDimensionsExtractor;
 use Jackardios\ImageDimensions\Support\TemporaryFile;
 use Jackardios\ImageDimensions\Support\TransferStopped;
@@ -306,10 +307,7 @@ class ImageDimensionsService implements ImageDimensionsContract
             throw FileTooLargeException::forDownload($this->maxDownloadBytes);
         }
 
-        $temp = new TemporaryFile($this->tempDir, 'imgdim_contents_');
-        $temp->append($contents);
-
-        return Dimensions::fromArray($this->analyzeFile($temp->path(), '(contents)'));
+        return Dimensions::fromArray($this->analyzeString($contents, '(contents)'));
     }
 
     /**
@@ -335,27 +333,7 @@ class ImageDimensionsService implements ImageDimensionsContract
         $position = $this->rewindIfSeekable($stream);
 
         try {
-            $temp = new TemporaryFile($this->tempDir, 'imgdim_stream_');
-            $limit = $this->maxDownloadBytes;
-
-            if ($limit > 0) {
-                // Read one byte past the cap so an overflow is detectable.
-                while ($temp->bytesWritten() <= $limit) {
-                    if ($temp->appendFromStream($stream, $limit + 1 - $temp->bytesWritten()) === 0) {
-                        break;
-                    }
-                }
-
-                if ($temp->bytesWritten() > $limit) {
-                    throw FileTooLargeException::forDownload($limit);
-                }
-            } else {
-                while ($temp->appendFromStream($stream, 1048576) > 0) {
-                    // keep reading until the stream is exhausted
-                }
-            }
-
-            return Dimensions::fromArray($this->analyzeFile($temp->path(), '(stream)'));
+            return Dimensions::fromArray($this->resolveFromStream($stream, '(stream)'));
         } finally {
             if ($position !== null) {
                 @fseek($stream, $position);
@@ -633,7 +611,7 @@ class ImageDimensionsService implements ImageDimensionsContract
     {
         $head = (string) @file_get_contents($temp->path(), false, null, 0, $this->remoteReadBytes);
 
-        if (SvgDimensionsExtractor::startsWithMarkup($head)) {
+        if (self::isMarkup($head)) {
             // SVG needs the whole document; from here on its own cap applies.
             $transfer['svg'] = true;
         } elseif (($dimensions = $this->rasterDimensions(
@@ -682,7 +660,7 @@ class ImageDimensionsService implements ImageDimensionsContract
                 break;
             }
 
-            $svg ??= SvgDimensionsExtractor::startsWithMarkup($chunk);
+            $svg ??= self::isMarkup($chunk);
             $temp->append($chunk);
             $this->assertWithinTransferLimit($svg, $temp->bytesWritten());
         }
@@ -713,21 +691,20 @@ class ImageDimensionsService implements ImageDimensionsContract
             throw StorageAccessException::couldNotReadStream($path);
         }
 
-        $temp = new TemporaryFile($this->tempDir, 'imgdim_storage_');
-
         try {
-            return $this->resolveFromStream($stream, $temp, $path);
+            return $this->resolveFromStream($stream, $path);
         } finally {
             @fclose($stream);
         }
     }
 
     /**
-     * Resolve dimensions from an open stream.
+     * Resolve dimensions from an open stream, reading only as much as needed.
      *
-     * Reads a header-sized chunk first; if that is not enough to determine the
-     * dimensions, keeps reading the SAME stream (no second request, no full
-     * in-memory buffering) up to the configured download limit.
+     * The header (remote_read_bytes) is analyzed in memory, which settles most
+     * raster images. An SVG document is read whole, but never past its own
+     * size cap. A raster image whose header was not enough is read on into a
+     * temporary file, up to the download cap.
      *
      * @param  resource  $stream
      * @return array{width: int, height: int}
@@ -736,45 +713,81 @@ class ImageDimensionsService implements ImageDimensionsContract
      * @throws TemporaryFileException
      * @throws InvalidImageException
      */
-    protected function resolveFromStream($stream, TemporaryFile $temp, string $label): array
+    protected function resolveFromStream($stream, string $label): array
     {
-        $temp->appendFromStream($stream, $this->remoteReadBytes);
+        $head = StreamReader::read($stream, $this->remoteReadBytes);
+        if ($head === '') {
+            throw InvalidImageException::forPath($label, 'File is empty.');
+        }
 
-        try {
-            return $this->analyzeFile($temp->path(), $label);
-        } catch (FileTooLargeException $e) {
-            // A size cap was already exceeded (e.g. svg.max_file_size). Reading
-            // further would only waste bandwidth — this is final, not a
-            // "header was too short" failure.
-            throw $e;
-        } catch (InvalidImageException $e) {
-            // The header alone was insufficient. If more data is available,
-            // continue filling the same temp file and retry once.
-            if (feof($stream)) {
-                throw $e;
+        if (self::isMarkup($head)) {
+            $limit = $this->svgReadLimit();
+            $content = $head.StreamReader::read($stream, $limit === null ? PHP_INT_MAX : max(0, $limit + 1 - strlen($head)));
+
+            // Over the download cap, unless the SVG cap is the stricter one:
+            // analyzeSvg() reports that.
+            if ($this->maxDownloadBytes > 0 && strlen($content) > $this->maxDownloadBytes
+                && ($this->svgMaxFileSize <= 0 || $this->svgMaxFileSize > $this->maxDownloadBytes)
+            ) {
+                throw FileTooLargeException::forDownload($this->maxDownloadBytes);
             }
 
+            return $this->analyzeSvg($content, $label);
+        }
+
+        $dimensions = $this->rasterDimensions(
+            @getimagesizefromstring($head),
+            static fn () => HeifDimensionsReader::fromString($head),
+        );
+
+        if ($dimensions !== null) {
+            return $dimensions;
+        }
+
+        if (feof($stream)) {
+            throw InvalidImageException::forPath($label, 'Could not determine image dimensions');
+        }
+
+        // The header was not enough (large metadata before the image data,
+        // say): read on, into a file rather than memory.
+        $temp = new TemporaryFile($this->tempDir, 'imgdim_stream_');
+
+        try {
+            $temp->append($head);
             $limit = $this->maxDownloadBytes;
 
             if ($limit > 0) {
-                // Read up to the cap, plus one byte to detect an overflow.
-                $remaining = $limit + 1 - $temp->bytesWritten();
-                if ($remaining > 0) {
-                    $temp->appendFromStream($stream, $remaining);
+                // Read one byte past the cap so an overflow is detectable.
+                while ($temp->bytesWritten() <= $limit
+                    && $temp->appendFromStream($stream, $limit + 1 - $temp->bytesWritten()) > 0
+                ) {
+                    // keep reading
                 }
+
                 if ($temp->bytesWritten() > $limit) {
                     throw FileTooLargeException::forDownload($limit);
                 }
             } else {
-                // No cap: drain the stream in large chunks until it is
-                // exhausted (appendFromStream returns 0 once there is no more).
                 while ($temp->appendFromStream($stream, 1048576) > 0) {
-                    // keep reading
+                    // keep reading until the stream is exhausted
                 }
             }
 
             return $this->analyzeFile($temp->path(), $label);
+        } finally {
+            $temp->delete();
         }
+    }
+
+    /**
+     * How much of an SVG document a stream may deliver: the smaller of its
+     * own cap and the download cap, or null if neither applies.
+     */
+    private function svgReadLimit(): ?int
+    {
+        $caps = array_filter([$this->svgMaxFileSize, $this->maxDownloadBytes], static fn (int $cap) => $cap > 0);
+
+        return $caps === [] ? null : min($caps);
     }
 
     /**
@@ -833,6 +846,7 @@ class ImageDimensionsService implements ImageDimensionsContract
         }
 
         if ($this->startsWithMarkup($path)) {
+            // Checked before the document is read.
             if ($this->svgMaxFileSize > 0 && $fileSize > $this->svgMaxFileSize) {
                 throw FileTooLargeException::forSvg($this->svgMaxFileSize);
             }
@@ -842,11 +856,54 @@ class ImageDimensionsService implements ImageDimensionsContract
                 throw InvalidImageException::forPath($label, 'Could not read SVG file.');
             }
 
-            return $this->svgExtractor->extract($content)->toArray();
+            return $this->analyzeSvg($content, $label);
         }
 
         return $this->rasterDimensions(@getimagesize($path), static fn () => HeifDimensionsReader::fromFile($path))
             ?? throw InvalidImageException::forPath($label, 'Could not determine image dimensions');
+    }
+
+    /**
+     * Image dimensions of contents held in memory, as analyzeFile() finds
+     * them for a file.
+     *
+     * @return array{width: int, height: int}
+     *
+     * @throws InvalidImageException
+     * @throws FileTooLargeException
+     */
+    private function analyzeString(string $contents, string $label): array
+    {
+        if (self::isMarkup($contents)) {
+            return $this->analyzeSvg($contents, $label);
+        }
+
+        return $this->rasterDimensions(@getimagesizefromstring($contents), static fn () => HeifDimensionsReader::fromString($contents))
+            ?? throw InvalidImageException::forPath($label, 'Could not determine image dimensions');
+    }
+
+    /**
+     * @return array{width: int, height: int}
+     *
+     * @throws InvalidImageException
+     * @throws FileTooLargeException
+     */
+    private function analyzeSvg(string $content, string $label): array
+    {
+        if ($this->svgMaxFileSize > 0 && strlen($content) > $this->svgMaxFileSize) {
+            throw FileTooLargeException::forSvg($this->svgMaxFileSize);
+        }
+
+        return $this->svgExtractor->extract($content)->toArray();
+    }
+
+    /**
+     * Whether bytes read from the start of a source are markup, judged, as
+     * for a file, by the first kilobyte.
+     */
+    private static function isMarkup(string $head): bool
+    {
+        return SvgDimensionsExtractor::startsWithMarkup(substr($head, 0, 1024));
     }
 
     /**
