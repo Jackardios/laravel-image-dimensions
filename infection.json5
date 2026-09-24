@@ -1,0 +1,19 @@
+{
+    "$schema": "vendor/infection/infection/resources/schema.json",
+    "source": {
+        "directories": ["src"]
+    },
+    "timeout": 30,
+    "logs": {
+        "text": "build/infection.log",
+        "summary": "build/infection-summary.log"
+    },
+    "mutators": {
+        "@default": true
+    },
+    // One known equivalent mutant: removing the (float) cast in
+    // SvgDimensionsExtractor::parseLength() changes nothing, because the regex
+    // only lets a plain numeric string through and PHP multiplies it the same.
+    "minMsi": 99,
+    "minCoveredMsi": 99
+}

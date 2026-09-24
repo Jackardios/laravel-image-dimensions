@@ -1,0 +1,13 @@
+# Larastan is not a require-dev dependency: its Laravel constraints would
+# stop the prefer-lowest jobs from resolving Laravel 10.0. CI installs it
+# in the static-analysis job (larastan ^2.9 on PHP 8.1, ^3.0 on PHP 8.5).
+includes:
+    - vendor/larastan/larastan/extension.neon
+
+parameters:
+    # 1.x is a maintenance line: level 5 passes without touching the 1.0
+    # code, and the SVG extractor added in 1.1 is clean at level max.
+    level: 5
+    paths:
+        - src
+    tmpDir: build/phpstan

@@ -7,3 +7,4 @@ Thumbs.db
 /vendor
 /tests/Unit/fixtures
 composer.lock
+/build/
