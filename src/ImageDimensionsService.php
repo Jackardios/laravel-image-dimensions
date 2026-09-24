@@ -19,6 +19,7 @@ use Jackardios\ImageDimensions\Exceptions\StorageAccessException;
 use Jackardios\ImageDimensions\Exceptions\TemporaryFileException;
 use Jackardios\ImageDimensions\Exceptions\UrlAccessException;
 use Jackardios\ImageDimensions\Exceptions\UrlNotAllowedException;
+use Jackardios\ImageDimensions\Support\HeifDimensionsReader;
 use Jackardios\ImageDimensions\Support\SvgDimensionsExtractor;
 use Jackardios\ImageDimensions\Support\TemporaryFile;
 use Jackardios\ImageDimensions\Support\TransferStopped;
@@ -33,6 +34,9 @@ use Throwable;
 
 class ImageDimensionsService implements ImageDimensionsContract
 {
+    /** IMAGETYPE_HEIF, defined since PHP 8.5. */
+    private const IMAGETYPE_HEIF = 20;
+
     /** @var int<8192, 1048576> */
     protected int $remoteReadBytes;
 
@@ -541,7 +545,10 @@ class ImageDimensionsService implements ImageDimensionsContract
         if (SvgDimensionsExtractor::startsWithMarkup($head)) {
             // SVG needs the whole document; from here on its own cap applies.
             $transfer['svg'] = true;
-        } elseif (($dimensions = $this->rasterDimensions(@getimagesizefromstring($head))) !== null) {
+        } elseif (($dimensions = $this->rasterDimensions(
+            @getimagesizefromstring($head),
+            static fn () => HeifDimensionsReader::fromString($head),
+        )) !== null) {
             throw new TransferStopped($dimensions);
         }
 
@@ -747,17 +754,42 @@ class ImageDimensionsService implements ImageDimensionsContract
             return $this->svgExtractor->extract($content)->toArray();
         }
 
-        return $this->rasterDimensions(@getimagesize($path))
+        return $this->rasterDimensions(@getimagesize($path), static fn () => HeifDimensionsReader::fromFile($path))
             ?? throw InvalidImageException::forPath($label, 'Could not determine image dimensions');
     }
 
     /**
-     * Dimensions from a getimagesize() result, or null if it has none.
+     * Dimensions of a raster image from its getimagesize() result, or null
+     * if it has none.
      *
+     * WBMP is rejected: it has no signature, so getimagesize() takes almost
+     * any bytes starting with two NULs for one. HEIF is read from its own
+     * metadata: getimagesize() cannot read it before PHP 8.5 and ignores the
+     * clean aperture since.
+     *
+     * @param  array<int|string, mixed>|false  $size
+     * @param  Closure(): (array{width: int, height: int}|null)  $readHeif
+     * @return array{width: int, height: int}|null
+     */
+    private function rasterDimensions(array|false $size, Closure $readHeif): ?array
+    {
+        $type = $size === false ? null : ($size[2] ?? null);
+
+        if ($type !== IMAGETYPE_WBMP && $type !== self::IMAGETYPE_HEIF && ($dimensions = $this->sizeDimensions($size)) !== null) {
+            return $dimensions;
+        }
+
+        // Metadata the reader rejects (a truncated `meta` box, say) may still
+        // give PHP 8.5+ a size, though one that ignores any crop.
+        return $readHeif()
+            ?? ($type === self::IMAGETYPE_HEIF ? $this->sizeDimensions($size) : null);
+    }
+
+    /**
      * @param  array<int|string, mixed>|false  $size
      * @return array{width: int, height: int}|null
      */
-    private function rasterDimensions(array|false $size): ?array
+    private function sizeDimensions(array|false $size): ?array
     {
         if ($size === false || ! is_int($size[0] ?? null) || ! is_int($size[1] ?? null) || $size[0] <= 0 || $size[1] <= 0) {
             return null;

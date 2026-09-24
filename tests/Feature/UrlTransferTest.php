@@ -72,6 +72,30 @@ class UrlTransferTest extends TestCase
     }
 
     #[Test]
+    public function it_stops_the_download_once_the_heif_metadata_gives_the_dimensions(): void
+    {
+        $service = $this->service(['max_download_bytes' => 1048576]);
+
+        $this->assertDimensions(33, 17, $service->fromUrl(self::$server->url('/heif?tail=50000000')));
+    }
+
+    #[Test]
+    public function it_keeps_reading_until_the_heif_metadata_arrives(): void
+    {
+        $this->assertDimensions(33, 17, $this->service()->fromUrl(self::$server->url('/heif?pad=200000')));
+    }
+
+    #[Test]
+    public function it_does_not_stop_at_bytes_that_look_like_a_wbmp_header(): void
+    {
+        // getimagesize() reads the first bytes as a 128x64 WBMP image.
+        $service = $this->service(['max_download_bytes' => 1048576]);
+
+        $this->expectException(FileTooLargeException::class);
+        $service->fromUrl(self::$server->url('/wbmp-like?tail=50000000'));
+    }
+
+    #[Test]
     public function a_declared_length_over_the_cap_does_not_reject_an_image_whose_header_suffices(): void
     {
         // The PNG is ~920 KB; its header fits in remote_read_bytes.

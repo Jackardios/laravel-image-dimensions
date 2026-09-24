@@ -31,6 +31,14 @@ $trickle = static function (string $bytes, float $interval): void {
     }
 };
 
+$zeros = static function (int $length): void {
+    $chunk = str_repeat("\0", 65536);
+    for ($sent = 0; $sent < $length && ! connection_aborted(); $sent += 65536) {
+        echo substr($chunk, 0, $length - $sent);
+        flush();
+    }
+};
+
 switch ($path) {
     // A PNG followed by a long tail: only the header should be downloaded.
     case '/png-with-tail':
@@ -41,11 +49,30 @@ switch ($path) {
         }
         header('Content-Type: image/png');
         echo $body;
-        $zeros = str_repeat("\0", 65536);
-        for ($sent = 0; $sent < $tail && ! connection_aborted(); $sent += 65536) {
-            echo $zeros;
-            flush();
+        $zeros($tail);
+        break;
+
+        // A HEIF test fixture followed by ?tail bytes. ?pad inserts a `free`
+        // box of that size after `ftyp`, so the metadata comes later.
+    case '/heif':
+        $body = (string) file_get_contents(dirname(__DIR__).'/fixtures/'.basename((string) ($query['name'] ?? 'p33x17.heic')));
+        $pad = (int) ($query['pad'] ?? 0);
+        if ($pad > 0) {
+            $ftypSize = unpack('N', $body)[1];
+            $body = substr($body, 0, $ftypSize).pack('N', 8 + $pad).'free'.str_repeat("\0", $pad).substr($body, $ftypSize);
         }
+        $tail = (int) ($query['tail'] ?? 0);
+        header('Content-Length: '.(strlen($body) + $tail));
+        header('Content-Type: image/heic');
+        echo $body;
+        $zeros($tail);
+        break;
+
+        // Starts like a WBMP image, which has no signature.
+    case '/wbmp-like':
+        header('Content-Length: '.(5 + (int) ($query['tail'] ?? 0)));
+        echo "\x00\x00\x81\x00\x40";
+        $zeros((int) ($query['tail'] ?? 0));
         break;
 
     case '/png':
