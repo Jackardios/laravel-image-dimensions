@@ -39,27 +39,29 @@ final class TemporaryFile
      */
     public function __construct(string $directory, string $prefix = 'imgdim_')
     {
-        if (! is_dir($directory) || ! is_writable($directory)) {
+        // Neither is_writable() nor tempnam(). On Windows, is_writable() is
+        // false for a writable directory with the read-only attribute, and
+        // tempnam() keeps three characters of the prefix. Everywhere, tempnam()
+        // silently falls back to the system temp directory when it cannot
+        // create the file in the one it was given.
+        if (! is_dir($directory)) {
             throw TemporaryFileException::couldNotCreate();
         }
 
-        $path = false;
-        for ($attempt = 0; $attempt < 3 && $path === false; $attempt++) {
-            $path = @tempnam($directory, $prefix);
-            if ($path === false) {
-                usleep(10000); // 10ms
-            }
+        $base = rtrim($directory, '/\\').DIRECTORY_SEPARATOR.$prefix;
+        $handle = false;
+        for ($attempt = 0; $attempt < 3 && $handle === false; $attempt++) {
+            $path = $base.bin2hex(random_bytes(8));
+            // "x": create the file, never open an existing one.
+            $handle = @fopen($path, 'xb');
         }
 
-        if ($path === false) {
-            throw TemporaryFileException::couldNotCreate();
-        }
-
-        $handle = @fopen($path, 'wb');
         if ($handle === false) {
-            @unlink($path);
             throw TemporaryFileException::couldNotCreate();
         }
+
+        // Owner only, as tempnam() made it: the contents are downloads.
+        @chmod($path, 0600);
 
         $this->path = $path;
         $this->handle = $handle;

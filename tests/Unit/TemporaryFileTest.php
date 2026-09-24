@@ -80,4 +80,67 @@ class TemporaryFileTest extends TestCase
         $this->expectException(TemporaryFileException::class);
         new TemporaryFile($directory);
     }
+
+    #[Test]
+    public function it_throws_when_the_directory_does_not_exist(): void
+    {
+        $this->expectException(TemporaryFileException::class);
+        new TemporaryFile($this->tempPath.DIRECTORY_SEPARATOR.'missing');
+    }
+
+    /**
+     * tempnam() keeps three characters of the prefix on Windows.
+     */
+    #[Test]
+    public function it_creates_the_file_in_the_given_directory_with_the_whole_prefix(): void
+    {
+        $temp = new TemporaryFile($this->tempPath.DIRECTORY_SEPARATOR, 'imgdim_storage_');
+
+        $this->assertSame(realpath($this->tempPath), realpath(dirname($temp->path())));
+        $this->assertStringStartsWith('imgdim_storage_', basename($temp->path()));
+        $this->assertNotSame($temp->path(), (new TemporaryFile($this->tempPath, 'imgdim_storage_'))->path());
+    }
+
+    #[Test]
+    public function only_the_owner_may_read_the_file(): void
+    {
+        if (PHP_OS_FAMILY === 'Windows') {
+            $this->markTestSkipped('POSIX permissions do not apply on Windows.');
+        }
+
+        $previous = umask(0022);
+
+        try {
+            $temp = new TemporaryFile($this->tempPath);
+        } finally {
+            umask($previous);
+        }
+
+        $this->assertSame(0600, fileperms($temp->path()) & 0777);
+    }
+
+    /**
+     * Windows ignores the read-only attribute on directories, but
+     * is_writable() does not.
+     */
+    #[Test]
+    public function it_uses_a_windows_directory_marked_read_only(): void
+    {
+        if (PHP_OS_FAMILY !== 'Windows') {
+            $this->markTestSkipped('The read-only attribute of directories is a Windows feature.');
+        }
+
+        $directory = $this->tempPath.DIRECTORY_SEPARATOR.'marked';
+        mkdir($directory);
+        exec('attrib +R '.escapeshellarg($directory), $output, $status);
+        $this->assertSame(0, $status);
+
+        try {
+            $temp = new TemporaryFile($directory);
+            $this->assertSame(realpath($directory), realpath(dirname($temp->path())));
+            $temp->delete();
+        } finally {
+            exec('attrib -R '.escapeshellarg($directory));
+        }
+    }
 }
