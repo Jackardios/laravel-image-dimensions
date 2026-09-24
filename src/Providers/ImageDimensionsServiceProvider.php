@@ -18,13 +18,15 @@ class ImageDimensionsServiceProvider extends ServiceProvider
             'image-dimensions'
         );
 
-        $this->app->singleton(ImageDimensionsService::class, function (Application $app) {
+        // Scoped: built afresh for each request under Octane and each queued
+        // job, so configuration changed at run time takes effect.
+        $this->app->scoped(ImageDimensionsService::class, function (Application $app) {
             $config = $app->make('config')->get('image-dimensions', []);
 
             return new ImageDimensionsService(is_array($config) ? $config : []);
         });
 
-        // Resolve the same singleton whether the caller type-hints the concrete
+        // Resolve the same instance whether the caller type-hints the concrete
         // class, the contract, or the legacy 'image-dimensions' string alias.
         $this->app->alias(ImageDimensionsService::class, ImageDimensionsContract::class);
         $this->app->alias(ImageDimensionsService::class, 'image-dimensions');

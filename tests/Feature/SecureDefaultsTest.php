@@ -54,7 +54,7 @@ class SecureDefaultsTest extends TestCase
         config()->set('image-dimensions.url.allow_private_hosts', false);
         config()->set('image-dimensions.enable_cache', false);
 
-        // Drop the singleton so it is rebuilt from the config above.
+        // Drop the instance so it is rebuilt from the config above.
         $this->app->forgetInstance(ImageDimensionsService::class);
 
         $service = $this->app->make(ImageDimensionsContract::class);
