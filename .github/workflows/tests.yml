@@ -4,46 +4,211 @@ on:
   push:
     branches:
       - main
+      - 1.x
   pull_request:
+  schedule:
+    # Weekly, to catch breakage from new dependency releases.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  run:
+  tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    strategy:
-      matrix:
-        php: ['8.1', '8.2', '8.3', '8.4']
-        laravel: ['^10.0', '^11.0', '^12.0']
-        dependency-version: [prefer-lowest, prefer-stable]
-        exclude:
-          - php: '8.1'
-            laravel: '^11.0'
-          - php: '8.1'
-            laravel: '^12.0'
-        include:
-          - laravel: '^10.0'
-            testbench: '^8.0'
-          - laravel: '^11.0'
-            testbench: '^9.0'
-          - laravel: '^12.0'
-            testbench: '^10.0'
+    timeout-minutes: 15
 
-    name: P${{ matrix.php }} - L${{ matrix.laravel }} - ${{ matrix.dependency-version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Each Laravel version on the PHP versions it supports.
+        include:
+          - { php: '8.1', laravel: '10', testbench: '8' }
+          - { php: '8.2', laravel: '10', testbench: '8' }
+          - { php: '8.3', laravel: '10', testbench: '8' }
+          - { php: '8.2', laravel: '11', testbench: '9' }
+          - { php: '8.3', laravel: '11', testbench: '9' }
+          - { php: '8.4', laravel: '11', testbench: '9' }
+          - { php: '8.2', laravel: '12', testbench: '10' }
+          - { php: '8.3', laravel: '12', testbench: '10' }
+          - { php: '8.4', laravel: '12', testbench: '10' }
+          - { php: '8.5', laravel: '12', testbench: '10' }
+          - { php: '8.3', laravel: '13', testbench: '11' }
+          - { php: '8.4', laravel: '13', testbench: '11' }
+          - { php: '8.5', laravel: '13', testbench: '11' }
+        dependencies: [lowest, highest]
+
+    name: PHP ${{ matrix.php }} - Laravel ${{ matrix.laravel }} - ${{ matrix.dependencies }}
+
+    env:
+      # Composer >= 2.9 refuses to install releases with security advisories.
+      # Every Laravel 10 and 11 release has one, and so do the oldest 12.x and
+      # 13.x releases a lowest install must reach. The package supports those
+      # versions, so the test jobs have to be able to install them; the audit
+      # job below reports advisories for the current highest versions.
+      COMPOSER_NO_BLOCKING: ${{ (matrix.dependencies == 'lowest' || matrix.laravel == '10' || matrix.laravel == '11') && '1' || '' }}
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v7
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
-          extensions: gd
+          extensions: dom, fileinfo, libxml, gd
+          coverage: none
+
+      - name: Constrain Laravel version
+        run: >
+          composer require --dev --no-update --no-interaction
+          "laravel/framework:^${{ matrix.laravel }}.0"
+          "orchestra/testbench:^${{ matrix.testbench }}.0"
 
       - name: Install dependencies
-        run: |
-          composer require -W --dev "laravel/framework:${{ matrix.laravel }}" "orchestra/testbench:${{ matrix.testbench }}" --no-interaction --no-update
-          composer update --${{ matrix.dependency-version }} --prefer-dist --no-interaction
+        uses: ramsey/composer-install@v4
+        with:
+          dependency-versions: ${{ matrix.dependencies }}
+
+      - name: Show installed versions
+        run: composer show laravel/framework orchestra/testbench-core phpunit/phpunit guzzlehttp/guzzle | grep -E '^(name|versions)'
 
       - name: Run tests
-        run: ./vendor/bin/phpunit
+        run: vendor/bin/phpunit --order-by=random
+
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    name: Coverage & mutation testing
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: dom, fileinfo, libxml, gd
+          coverage: pcov
+
+      - name: Add Infection
+        run: |
+          composer config --no-plugins allow-plugins.infection/extension-installer true
+          composer require --dev --no-update --no-interaction \
+            "laravel/framework:^12.0" "orchestra/testbench:^10.0" "infection/infection:^0.35"
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@v4
+
+      - name: Run tests with coverage
+        run: vendor/bin/phpunit --coverage-text --only-summary-for-coverage-text --coverage-clover=build/coverage.xml
+
+      - name: Mutation testing
+        run: vendor/bin/infection --threads=max --no-progress --show-mutations
+
+  static-analysis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { php: '8.1', laravel: '10', testbench: '8', larastan: '^2.9' }
+          - { php: '8.5', laravel: '13', testbench: '11', larastan: '^3.0' }
+
+    name: PHPStan - PHP ${{ matrix.php }}
+
+    env:
+      COMPOSER_NO_BLOCKING: ${{ matrix.laravel == '10' && '1' || '' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: dom, fileinfo, libxml, gd
+          coverage: none
+
+      - name: Add Larastan
+        run: >
+          composer require --dev --no-update --no-interaction
+          "laravel/framework:^${{ matrix.laravel }}.0"
+          "orchestra/testbench:^${{ matrix.testbench }}.0"
+          "larastan/larastan:${{ matrix.larastan }}"
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@v4
+
+      - name: Run PHPStan
+        run: vendor/bin/phpstan analyse --no-progress --memory-limit=512M
+
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    name: Composer audit
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          coverage: none
+
+      - name: Validate composer.json
+        run: composer validate --strict --no-check-lock
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@v4
+
+      - name: Audit installed packages
+        run: composer audit
+
+  experimental:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    continue-on-error: true
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: 'Windows', os: windows-latest, php: '8.4' }
+          - { name: 'PHP nightly', os: ubuntu-latest, php: '8.6' }
+
+    name: Experimental - ${{ matrix.name }}
+
+    steps:
+      - name: Disable Git line-ending conversion
+        run: git config --global core.autocrlf false
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: dom, fileinfo, libxml, gd
+          coverage: none
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@v4
+        with:
+          # Dependencies may not declare support for an unreleased PHP yet.
+          composer-options: ${{ matrix.php == '8.6' && '--ignore-platform-req=php+' || '' }}
+
+      - name: Run tests
+        run: vendor/bin/phpunit --display-deprecations
