@@ -235,7 +235,13 @@ class SvgDimensionsTest extends TestCase
             $this->service->fromLocal($path);
             $this->fail('The entity payload must be rejected.');
         } catch (InvalidImageException $e) {
-            $this->assertStringContainsString('Entity references are not supported', $e->getMessage());
+            // libxml 2.11+ stops the parse itself: the references in this
+            // attribute would amplify the document a thousandfold. Earlier
+            // releases parse it and leave the rejection to the guard.
+            $this->assertMatchesRegularExpression(
+                '/^(Entity references are not supported|Could not parse SVG: Maximum entity amplification factor exceeded)/',
+                $e->getMessage(),
+            );
         }
 
         // Expanding this payload takes ~5 s; the guard needs milliseconds.
