@@ -219,6 +219,12 @@ class UrlTransferTest extends TestCase
     }
 
     #[Test]
+    public function it_fetches_a_url_with_spaces_and_non_ascii_characters(): void
+    {
+        $this->assertDimensions(5, 6, $this->service()->fromUrl(self::$server->url('/png?w=5&h=6&name=a b ü#top')));
+    }
+
+    #[Test]
     public function it_reports_an_http_error_status(): void
     {
         $this->expectException(UrlAccessException::class);

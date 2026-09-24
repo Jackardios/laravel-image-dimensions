@@ -166,6 +166,17 @@ class UrlGuardTest extends TestCase
     }
 
     #[Test]
+    public function an_allowlist_entry_matches_the_punycode_of_an_internationalized_host(): void
+    {
+        $guard = new UrlGuard(allowPrivateHosts: true, allowedHosts: ['Пример.РФ']);
+
+        $guard->assertAllowed('https://xn--e1afmkfd.xn--p1ai/a.png');
+
+        $this->expectException(UrlNotAllowedException::class);
+        $guard->assertAllowed('https://example.com/a.png');
+    }
+
+    #[Test]
     public function it_accepts_the_scheme_in_any_case(): void
     {
         $guard = new UrlGuard(allowPrivateHosts: false);

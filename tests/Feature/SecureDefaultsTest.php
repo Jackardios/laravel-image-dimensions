@@ -178,6 +178,49 @@ class SecureDefaultsTest extends TestCase
     }
 
     /**
+     * The guard must judge the host the request actually goes to: an
+     * internationalized name is checked, cached and fetched as punycode.
+     */
+    #[Test]
+    public function the_guard_checks_the_host_that_is_fetched(): void
+    {
+        $resolved = [];
+        $service = $this->serviceResolvingWith(function (string $host) use (&$resolved) {
+            $resolved[] = $host;
+
+            return ['93.184.215.14'];
+        });
+        Http::fake(['https://xn--e1afmkfd.xn--p1ai/*' => Http::response($this->imageBytes(3, 4))]);
+
+        $this->assertDimensions(3, 4, $service->fromUrl('https://Пример.рф/картинка.png'));
+
+        $this->assertSame(['xn--e1afmkfd.xn--p1ai'], $resolved);
+        Http::assertSent(fn ($request) => $request->url() === 'https://xn--e1afmkfd.xn--p1ai/%D0%BA%D0%B0%D1%80%D1%82%D0%B8%D0%BD%D0%BA%D0%B0.png');
+    }
+
+    #[Test]
+    public function spellings_of_one_url_share_a_cache_entry(): void
+    {
+        $service = $this->serviceResolvingWith(fn (string $host) => ['93.184.215.14']);
+        Http::fake(['https://example.com/*' => Http::response($this->imageBytes(3, 4))]);
+
+        foreach (['https://example.com/a b.png', 'https://example.com/a%20b.png#top', 'HTTPS://EXAMPLE.COM:443/a b.png'] as $url) {
+            $this->assertDimensions(3, 4, $service->fromUrl($url));
+        }
+
+        Http::assertSentCount(1);
+    }
+
+    #[Test]
+    public function a_host_may_contain_underscores(): void
+    {
+        $service = $this->serviceResolvingWith(fn (string $host) => ['93.184.215.14']);
+        Http::fake(['https://my_bucket.s3.amazonaws.com/*' => Http::response($this->imageBytes(3, 4))]);
+
+        $this->assertDimensions(3, 4, $service->fromUrl('https://my_bucket.s3.amazonaws.com/a.png'));
+    }
+
+    /**
      * The SSRF guard with its defaults, but with a fake resolver so that
      * no test depends on real DNS.
      *

@@ -73,7 +73,7 @@ final class UrlGuard
 
     private bool $allowPrivateHosts;
 
-    /** @var list<string> Lower-cased allowed hostnames; empty means "any". */
+    /** @var list<string> Normalized allowed hostnames; empty means "any". */
     private array $allowedHosts;
 
     private int $maxRedirects;
@@ -93,8 +93,14 @@ final class UrlGuard
         ?Closure $resolver = null,
     ) {
         $this->allowPrivateHosts = $allowPrivateHosts;
+        // In the form URLs are normalized to, so "пример.рф" matches its
+        // punycode.
         $this->allowedHosts = array_values(array_filter(array_map(
-            static fn ($host) => strtolower(trim((string) $host)),
+            static function ($host): string {
+                $host = strtolower(trim((string) $host));
+
+                return UrlNormalizer::normalizeHost($host) ?? $host;
+            },
             $allowedHosts
         ), static fn (string $host) => $host !== ''));
         $this->maxRedirects = max(0, $maxRedirects);

@@ -24,6 +24,7 @@ use Jackardios\ImageDimensions\Support\SvgDimensionsExtractor;
 use Jackardios\ImageDimensions\Support\TemporaryFile;
 use Jackardios\ImageDimensions\Support\TransferStopped;
 use Jackardios\ImageDimensions\Support\UrlGuard;
+use Jackardios\ImageDimensions\Support\UrlNormalizer;
 use League\Flysystem\Local\LocalFilesystemAdapter;
 use League\Flysystem\PathTraversalDetected;
 use Psr\Http\Message\ResponseInterface;
@@ -141,16 +142,18 @@ class ImageDimensionsService implements ImageDimensionsContract
      */
     public function fromUrl(string $url): Dimensions
     {
-        $url = trim($url);
-
-        if (! filter_var($url, FILTER_VALIDATE_URL)) {
-            throw new InvalidImageException("Invalid URL provided: {$url}");
-        }
-
-        $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
-        if ($scheme !== 'http' && $scheme !== 'https') {
+        $scheme = parse_url(trim($url), PHP_URL_SCHEME);
+        if (is_string($scheme) && ! in_array(strtolower($scheme), ['http', 'https'], true)) {
             throw new InvalidImageException('Only HTTP and HTTPS URLs are supported');
         }
+
+        // Checked, cached and fetched in this one form.
+        $normalized = UrlNormalizer::normalize($url);
+        if ($normalized === null) {
+            throw new InvalidImageException('Invalid URL provided: '.trim($url));
+        }
+
+        $url = $normalized;
 
         // SSRF guard, first without DNS: a cache hit must not cost a lookup,
         // nor fail when DNS is down.

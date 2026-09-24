@@ -17,11 +17,13 @@
         "ext-fileinfo": "*",
         "ext-libxml": "*",
         "guzzlehttp/guzzle": "^7.8",
+        "guzzlehttp/psr7": "^1.9.1 || ^2.5.1",
         "illuminate/cache": "^12.0 || ^13.0",
         "illuminate/contracts": "^12.0 || ^13.0",
         "illuminate/filesystem": "^12.0 || ^13.0",
         "illuminate/http": "^12.0 || ^13.0",
-        "illuminate/support": "^12.0 || ^13.0"
+        "illuminate/support": "^12.0 || ^13.0",
+        "symfony/polyfill-intl-idn": "^1.26"
     },
     "require-dev": {
         "ext-gd": "*",
