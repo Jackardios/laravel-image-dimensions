@@ -19,8 +19,14 @@ $png = static function (int $width, int $height): string {
     return (string) ob_get_clean();
 };
 
+// Stalling routes give up after this long: past the 2.5 s the timeout tests
+// allow, so a missing deadline still fails them, yet short enough that on
+// Windows, where the server takes one request at a time and does not see the
+// client leave, the next test does not wait out its own timeout.
+const STALL_SECONDS = 3;
+
 $trickle = static function (string $bytes, float $interval): void {
-    $deadline = microtime(true) + 5;
+    $deadline = microtime(true) + STALL_SECONDS;
     foreach (str_split($bytes) as $byte) {
         echo $byte;
         flush();
@@ -83,7 +89,7 @@ switch ($path) {
         // No response for a while: only a total deadline stops this. (The
         // built-in server sends the headers with the first output.)
     case '/slow-headers':
-        $deadline = microtime(true) + 5;
+        $deadline = microtime(true) + STALL_SECONDS;
         while (microtime(true) < $deadline && ! connection_aborted()) {
             usleep(100000);
         }
