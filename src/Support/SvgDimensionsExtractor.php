@@ -19,6 +19,8 @@ use Jackardios\ImageDimensions\Exceptions\InvalidImageException;
  * quadratic time. No regex-based sanitisation is performed — it broke valid
  * documents (internal DTD subsets, entities) without adding protection, since
  * this class only ever reads the root element's geometry.
+ *
+ * @internal
  */
 final class SvgDimensionsExtractor
 {

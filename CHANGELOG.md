@@ -63,7 +63,9 @@ migration steps.
 - **BREAKING:** an SVG with an explicit zero `width` or `height` is an error
   instead of falling back to the `viewBox`.
 - **BREAKING:** `ImageDimensionsService`'s protected methods changed; among
-  them `resolveFromStream()` no longer takes a `TemporaryFile`.
+  them `resolveFromStream()` no longer takes a `TemporaryFile`. Its protected
+  members and the `Support` classes are marked `@internal` and may change in
+  any release; extend by binding your own implementation of the contract.
 - A download is stopped as soon as its first `remote_read_bytes` give the
   dimensions (a PNG with a 50 MB tail costs its first ~180 KB). The download
   cap applies to the bytes received; a `Content-Length` over it only fails the

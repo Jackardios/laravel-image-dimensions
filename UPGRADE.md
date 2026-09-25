@@ -152,6 +152,11 @@ Protected methods changed with the new download and stream handling;
 `resolveFromStream()`, for one, no longer takes a `TemporaryFile`. Code that
 extends `ImageDimensionsService` and overrides its internals needs a review.
 
+The service's protected properties and methods, and the `Support` classes, are
+now marked `@internal`: they may change in any release. To change how
+dimensions are read, bind your own implementation of the
+`Contracts\ImageDimensions` contract, or one that wraps the service.
+
 ### Cache semantics
 
 - `cache_ttl: 0` (or any value ≤ 0) now means **caching disabled** for these

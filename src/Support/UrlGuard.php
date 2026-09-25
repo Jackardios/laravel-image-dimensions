@@ -22,6 +22,8 @@ use Jackardios\ImageDimensions\Exceptions\UrlNotAllowedException;
  * client, so a hostile resolver could return a public address to this check and
  * a private one to the actual request. Use `allowed_hosts` for a strict
  * allowlist in high-sensitivity environments.
+ *
+ * @internal
  */
 final class UrlGuard
 {

@@ -40,24 +40,39 @@ class ImageDimensionsService implements ImageDimensionsContract
     /** IMAGETYPE_HEIF, defined since PHP 8.5. */
     private const IMAGETYPE_HEIF = 20;
 
-    /** @var int<8192, 1048576> */
+    /**
+     * @var int<8192, 1048576>
+     *
+     * @internal
+     */
     protected int $remoteReadBytes;
 
+    /** @internal */
     protected int $maxDownloadBytes;
 
+    /** @internal */
     protected string $tempDir;
 
+    /** @internal */
     protected bool $enableCache;
 
+    /** @internal */
     protected ?int $cacheTtl;
 
+    /** @internal */
     protected int $svgMaxFileSize;
 
-    /** @var array{timeout: float|int, connect_timeout: float|int, verify: bool} */
+    /**
+     * @var array{timeout: float|int, connect_timeout: float|int, verify: bool}
+     *
+     * @internal
+     */
     protected array $httpOptions;
 
+    /** @internal */
     protected SvgDimensionsExtractor $svgExtractor;
 
+    /** @internal */
     protected UrlGuard $urlGuard;
 
     /**
@@ -449,6 +464,8 @@ class ImageDimensionsService implements ImageDimensionsContract
      * Non-package throwables (e.g. TypeError) are NOT swallowed.
      *
      * @param  callable(): Dimensions  $resolver
+     *
+     * @internal
      */
     protected function attempt(callable $resolver): ?Dimensions
     {
@@ -466,6 +483,8 @@ class ImageDimensionsService implements ImageDimensionsContract
      * re-validated against the SSRF guard.
      *
      * @return array<string, mixed>
+     *
+     * @internal
      */
     protected function requestOptions(): array
     {
@@ -497,6 +516,8 @@ class ImageDimensionsService implements ImageDimensionsContract
      * @throws TemporaryFileException
      * @throws FileTooLargeException
      * @throws InvalidImageException
+     *
+     * @internal
      */
     protected function getDimensionsFromUrl(string $url): array
     {
@@ -700,6 +721,8 @@ class ImageDimensionsService implements ImageDimensionsContract
      * @throws TemporaryFileException
      * @throws FileTooLargeException
      * @throws InvalidImageException
+     *
+     * @internal
      */
     protected function getDimensionsFromStorage($disk, string $path): array
     {
@@ -736,6 +759,8 @@ class ImageDimensionsService implements ImageDimensionsContract
      * @throws FileTooLargeException
      * @throws TemporaryFileException
      * @throws InvalidImageException
+     *
+     * @internal
      */
     protected function resolveFromStream($stream, string $label): array
     {
@@ -863,6 +888,8 @@ class ImageDimensionsService implements ImageDimensionsContract
      *
      * @throws InvalidImageException
      * @throws FileTooLargeException
+     *
+     * @internal
      */
     protected function analyzeFile(string $path, string $label): array
     {
@@ -997,6 +1024,8 @@ class ImageDimensionsService implements ImageDimensionsContract
      *
      * @param  string|list<mixed>  $identity  What identifies the source's
      *                                        current contents (URL, or path plus file metadata).
+     *
+     * @internal
      */
     protected function getCacheKey(string $type, string|array $identity): string
     {
@@ -1012,6 +1041,8 @@ class ImageDimensionsService implements ImageDimensionsContract
      * {@see Dimensions} value object before returning.
      *
      * @param  Closure(): array{width: int, height: int}  $callback
+     *
+     * @internal
      */
     protected function getCachedOrCompute(string $key, Closure $callback): Dimensions
     {

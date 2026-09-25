@@ -15,6 +15,8 @@ use Jackardios\ImageDimensions\Exceptions\TemporaryFileException;
  * any file whose object never got destroyed because a fatal error ended the
  * request. A single write handle is kept open across appends, allowing a
  * partial read to be extended with more data without reopening the file.
+ *
+ * @internal
  */
 final class TemporaryFile
 {
