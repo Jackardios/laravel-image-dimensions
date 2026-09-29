@@ -341,6 +341,24 @@ class SvgDimensionsTest extends TestCase
     }
 
     #[Test]
+    public function it_measures_utf16_svg(): void
+    {
+        $svg = '<?xml version="1.0" encoding="UTF-16"?><svg xmlns="http://www.w3.org/2000/svg" width="10" height="20"/>';
+
+        // With a byte order mark, little- and big-endian.
+        foreach (["\xFF\xFE" => "%s\0", "\xFE\xFF" => "\0%s"] as $bom => $unit) {
+            $contents = $bom.implode('', array_map(static fn (string $char) => sprintf($unit, $char), str_split($svg)));
+            $stream = fopen('php://memory', 'r+b');
+            fwrite($stream, $contents);
+            rewind($stream);
+
+            $this->assertDimensions(10, 20, $this->service->fromContents($contents));
+            $this->assertDimensions(10, 20, $this->service->fromLocal($this->createFile(bin2hex($bom), $contents)));
+            $this->assertDimensions(10, 20, $this->service->fromStream($stream));
+        }
+    }
+
+    #[Test]
     public function it_recognises_svg_with_a_bom_and_leading_whitespace(): void
     {
         $path = $this->createFile('bom', "\xEF\xBB\xBF\n  <svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1in\" height=\"2in\"/>");

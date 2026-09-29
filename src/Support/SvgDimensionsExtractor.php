@@ -54,6 +54,12 @@ final class SvgDimensionsExtractor
      */
     public static function startsWithMarkup(string $bytes): bool
     {
+        // UTF-16, which libxml reads too: after a byte order mark, or an XML
+        // declaration without one.
+        if (preg_match('/^(?:\xFF\xFE<\x00|\xFE\xFF\x00<|<\x00\?\x00|\x00<\x00\?)/', $bytes) === 1) {
+            return true;
+        }
+
         if (str_starts_with($bytes, "\xEF\xBB\xBF")) {
             $bytes = substr($bytes, 3);
         }

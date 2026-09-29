@@ -75,6 +75,22 @@ class SvgDimensionsExtractorTest extends TestCase
     }
 
     #[Test]
+    public function it_recognises_utf16_markup(): void
+    {
+        foreach (['little-endian' => false, 'big-endian' => true] as $order => $bigEndian) {
+            $bom = $bigEndian ? "\xFE\xFF" : "\xFF\xFE";
+
+            $this->assertTrue(SvgDimensionsExtractor::startsWithMarkup($bom.self::utf16('<svg/>', $bigEndian)), $order);
+            $this->assertTrue(SvgDimensionsExtractor::startsWithMarkup(self::utf16('<?xml version="1.0"?><svg/>', $bigEndian)), $order);
+        }
+    }
+
+    private static function utf16(string $ascii, bool $bigEndian): string
+    {
+        return implode('', array_map(static fn (string $char) => $bigEndian ? "\0".$char : $char."\0", str_split($ascii)));
+    }
+
+    #[Test]
     public function it_does_not_take_other_content_for_markup(): void
     {
         $this->assertFalse(SvgDimensionsExtractor::startsWithMarkup(''));
