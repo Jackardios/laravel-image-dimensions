@@ -18,6 +18,13 @@
             "ignoreSourceCodeByRegex": [
                 ".*\\$pixels = \\(float\\) \\$m\\['number'\\].*"
             ]
+        },
+        // Splitting a viewBox into at most six parts instead of five rejects
+        // the same values: anything past the fourth is an error either way.
+        "IncrementInteger": {
+            "ignoreSourceCodeByRegex": [
+                ".*preg_split\\('/\\[\\\\s,\\]\\+/', \\$value, 5,.*"
+            ]
         }
     },
     "minMsi": 100,
