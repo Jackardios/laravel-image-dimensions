@@ -55,6 +55,8 @@ from the SVG fixes below.
 
 - `ImageDimensionsService::sanitizeSvgContent()` and `parseSvgDimension()` are
   no longer called. They remain for subclasses and will be removed in 2.0.
+  Overriding them has no effect any more; override `getSvgDimensions()` to
+  change how an SVG is measured.
 
 ## [1.0.0] - 2025-09-26
 
