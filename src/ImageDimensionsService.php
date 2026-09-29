@@ -671,6 +671,7 @@ class ImageDimensionsService implements ImageDimensionsContract
         } elseif (($dimensions = $this->rasterDimensions(
             @getimagesizefromstring($head),
             static fn () => HeifDimensionsReader::fromString($head),
+            complete: false,
         )) !== null) {
             throw new TransferStopped($dimensions);
         }
@@ -798,6 +799,7 @@ class ImageDimensionsService implements ImageDimensionsContract
         $dimensions = $this->rasterDimensions(
             @getimagesizefromstring($head),
             static fn () => HeifDimensionsReader::fromString($head),
+            complete: feof($stream),
         );
 
         if ($dimensions !== null) {
@@ -979,9 +981,10 @@ class ImageDimensionsService implements ImageDimensionsContract
      *
      * @param  array<int|string, mixed>|false  $size
      * @param  Closure(): (array{width: int, height: int}|null)  $readHeif
+     * @param  bool  $complete  Whether these are all the bytes, not a header.
      * @return array{width: int, height: int}|null
      */
-    private function rasterDimensions(array|false $size, Closure $readHeif): ?array
+    private function rasterDimensions(array|false $size, Closure $readHeif, bool $complete = true): ?array
     {
         $type = $size === false ? null : ($size[2] ?? null);
 
@@ -990,9 +993,10 @@ class ImageDimensionsService implements ImageDimensionsContract
         }
 
         // Metadata the reader rejects (a truncated `meta` box, say) may still
-        // give PHP 8.5+ a size, though one that ignores any crop.
+        // give PHP 8.5+ a size, though one that ignores any crop. In a header,
+        // the rest of the metadata may yet hold the crop.
         return $readHeif()
-            ?? ($type === self::IMAGETYPE_HEIF ? $this->sizeDimensions($size) : null);
+            ?? ($complete && $type === self::IMAGETYPE_HEIF ? $this->sizeDimensions($size) : null);
     }
 
     /**

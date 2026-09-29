@@ -81,17 +81,33 @@ class ImageFormatTest extends TestCase
         $this->assertDimensions(33, 17, $this->measure($source, $bytes, 'photo.heic'));
     }
 
+    /**
+     * The first chunk read holds only part of the metadata. PHP 8.5 finds
+     * the coded size (64x64) in it; the crop comes later.
+     */
+    #[Test]
+    #[DataProvider('sourceProvider')]
+    public function it_reads_heif_whose_metadata_runs_past_the_first_read(string $source): void
+    {
+        $bytes = self::padMeta(self::fixtureBytes('p33x17.heic'), 200000);
+
+        $this->assertDimensions(33, 17, $this->measure($source, $bytes, 'photo.heic'));
+    }
+
     #[Test]
     public function heif_metadata_the_reader_rejects_falls_back_to_php(): void
     {
         // The `meta` box claims to run past the end of the file.
         $bytes = substr_replace(self::fixtureBytes('grid1000.heic'), "\x01", 28, 1);
 
-        if (PHP_VERSION_ID < 80500) {
-            $this->expectException(InvalidImageException::class);
+        foreach (['contents', 'stream'] as $source) {
+            try {
+                $this->assertDimensions(1000, 700, $this->measure($source, $bytes, 'photo.heic'));
+                $this->assertGreaterThanOrEqual(80500, PHP_VERSION_ID, $source);
+            } catch (InvalidImageException $e) {
+                $this->assertLessThan(80500, PHP_VERSION_ID, "{$source}: {$e->getMessage()}");
+            }
         }
-
-        $this->assertDimensions(1000, 700, $this->service->fromContents($bytes));
     }
 
     /**
@@ -182,6 +198,19 @@ class ImageFormatTest extends TestCase
         $ftypSize = unpack('N', $bytes)[1];
 
         return substr($bytes, 0, $ftypSize).pack('N', 8 + $padding).'free'.str_repeat("\0", $padding).substr($bytes, $ftypSize);
+    }
+
+    /**
+     * Append a `free` box to the `meta` box that follows `ftyp`.
+     */
+    private static function padMeta(string $bytes, int $padding): string
+    {
+        $ftypSize = unpack('N', $bytes)[1];
+        $metaSize = unpack('N', $bytes, $ftypSize)[1];
+
+        return substr($bytes, 0, $ftypSize).pack('N', $metaSize + 8 + $padding)
+            .substr($bytes, $ftypSize + 4, $metaSize - 4).pack('N', 8 + $padding).'free'.str_repeat("\0", $padding)
+            .substr($bytes, $ftypSize + $metaSize);
     }
 
     private static function wbmp(int $width, int $height): string

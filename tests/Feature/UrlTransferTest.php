@@ -86,6 +86,16 @@ class UrlTransferTest extends TestCase
         $this->assertDimensions(33, 17, $this->service()->fromUrl(self::$server->url('/heif?pad=200000')));
     }
 
+    /**
+     * PHP 8.5 finds the coded size (64x64) in the first part of the
+     * metadata; the crop comes later.
+     */
+    #[Test]
+    public function it_keeps_reading_until_the_heif_metadata_ends(): void
+    {
+        $this->assertDimensions(33, 17, $this->service()->fromUrl(self::$server->url('/heif?metapad=200000')));
+    }
+
     #[Test]
     public function it_does_not_stop_at_bytes_that_look_like_a_wbmp_header(): void
     {
