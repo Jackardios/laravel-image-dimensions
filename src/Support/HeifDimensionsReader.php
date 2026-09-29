@@ -92,14 +92,13 @@ final class HeifDimensionsReader
 
                 if ($type === 'meta') {
                     $length = $size - $headerSize;
-
-                    // Version and flags come first; anything shorter is broken.
-                    if ($length < 4 || $length > self::MAX_META_SIZE) {
+                    if ($length > self::MAX_META_SIZE) {
                         return null;
                     }
 
-                    @fseek($handle, $offset + $headerSize);
-                    $meta = (string) @fread($handle, $length);
+                    // Not fread(): from a stream that is not a plain file, it
+                    // returns no more than a chunk of 8 KiB.
+                    $meta = (string) @stream_get_contents($handle, $length, $offset + $headerSize);
 
                     return strlen($meta) === $length ? self::fromMeta($meta) : null;
                 }
@@ -140,14 +139,15 @@ final class HeifDimensionsReader
         $primaryItem = null;
         // `ipco` children in order: type followed by content.
         $properties = [];
-        // Item ID => 1-based indexes into $properties.
-        $associations = [];
+        // Content start and end of each `ipma` box.
+        $ipmaBoxes = [];
 
         foreach (self::boxes($meta, 4, strlen($meta)) as [$type, $start, $end]) {
             if ($type === 'pitm') {
-                $primaryItem = ord($meta[$start] ?? "\x00") === 0
-                    ? self::uint16($meta, $start + 4)
-                    : self::uint32($meta, $start + 4);
+                // Version and flags, then a 16-bit item ID (32-bit from version 1).
+                $wide = ord($meta[$start] ?? "\x00") !== 0;
+                $primaryItem = $end - $start < ($wide ? 8 : 6) ? null
+                    : ($wide ? self::uint32($meta, $start + 4) : self::uint16($meta, $start + 4));
             } elseif ($type === 'iprp') {
                 foreach (self::boxes($meta, $start, $end) as [$childType, $childStart, $childEnd]) {
                     if ($childType === 'ipco') {
@@ -155,20 +155,31 @@ final class HeifDimensionsReader
                             $properties[] = $propertyType.substr($meta, $propertyStart, $propertyEnd - $propertyStart);
                         }
                     } elseif ($childType === 'ipma') {
-                        self::addAssociations($associations, $meta, $childStart, $childEnd);
+                        $ipmaBoxes[] = [$childStart, $childEnd];
                     }
                 }
             }
         }
 
-        if ($primaryItem === null || ! isset($associations[$primaryItem])) {
+        if ($primaryItem === null) {
+            return null;
+        }
+
+        // 1-based indexes into $properties; a later entry of the item
+        // replaces an earlier one.
+        $associations = null;
+        foreach ($ipmaBoxes as [$start, $end]) {
+            $associations = self::associations($meta, $start, $end, $primaryItem) ?? $associations;
+        }
+
+        if ($associations === null) {
             return null;
         }
 
         $width = $height = null;
         $clap = null;
 
-        foreach ($associations[$primaryItem] as $index) {
+        foreach ($associations as $index) {
             $property = $properties[$index - 1] ?? '';
             $type = substr($property, 0, 4);
             $content = substr($property, 4);
@@ -204,30 +215,37 @@ final class HeifDimensionsReader
     }
 
     /**
-     * Add the item property associations of an `ipma` box, replacing any
-     * earlier ones of the same item.
+     * The property associations of an item in an `ipma` box: the last entry
+     * of the item, or null if it has none.
      *
-     * @param  array<int, list<int>>  $associations
+     * @return list<int>|null
      */
-    private static function addAssociations(array &$associations, string $data, int $start, int $end): void
+    private static function associations(string $data, int $start, int $end, int $item): ?array
     {
         $version = ord($data[$start] ?? "\x00");
         $wideIndexes = (ord($data[$start + 3] ?? "\x00") & 1) === 1;
         $offset = $start + 4;
         $count = self::uint32($data, $offset);
         $offset += 4;
+        $found = null;
 
         for ($entry = 0; $entry < $count && $offset < $end; $entry++) {
             if ($version < 1) {
-                $item = self::uint16($data, $offset);
+                $entryItem = self::uint16($data, $offset);
                 $offset += 2;
             } else {
-                $item = self::uint32($data, $offset);
+                $entryItem = self::uint32($data, $offset);
                 $offset += 4;
             }
 
             $associationCount = ord($data[$offset] ?? "\x00");
             $offset++;
+
+            if ($entryItem !== $item) {
+                $offset += $associationCount * ($wideIndexes ? 2 : 1);
+
+                continue;
+            }
 
             $indexes = [];
             for ($i = 0; $i < $associationCount && $offset < $end; $i++) {
@@ -241,8 +259,10 @@ final class HeifDimensionsReader
                 }
             }
 
-            $associations[$item] = $indexes;
+            $found = $indexes;
         }
+
+        return $found;
     }
 
     /**

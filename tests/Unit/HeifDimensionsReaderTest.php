@@ -164,8 +164,14 @@ class HeifDimensionsReaderTest extends TestCase
             'index past the properties' => [self::heif([self::ispe(1, 1)], [1 => [2]])],
             'empty spatial extent' => [self::heif([self::ispe(0, 10)], [1 => [1]])],
             'no primary item' => [self::box('ftyp', 'heic'.pack('N', 0).'mif1heic').self::fullBox('meta', 0, 0, '')],
-            // fread() with a length of 0 throws a ValueError.
             'empty meta box' => [self::box('ftyp', 'heic'.pack('N', 0).'mif1heic').self::box('meta', '')],
+            // The item ID must not be read from the next box, "\0\2zz".
+            'truncated primary item box' => [self::box('ftyp', 'heic'.pack('N', 0).'mif1heic').self::fullBox('meta', 0, 0,
+                self::box('pitm', '').self::box("\0\2zz", '').self::box('iprp',
+                    self::box('ipco', self::ispe(1000, 1000).self::ispe(300, 200))
+                    .self::fullBox('ipma', 0, 0, pack('N', 2).pack('n', 1)."\1\1".pack('n', 2)."\1\2"),
+                ),
+            )],
         ];
     }
 
@@ -305,6 +311,45 @@ class HeifDimensionsReaderTest extends TestCase
 
         $this->assertSame(['width' => 300, 'height' => 200], HeifDimensionsReader::fromString($bytes));
         $this->assertLessThan(1.0, microtime(true) - $started);
+    }
+
+    /**
+     * Regression: the associations of every item were kept, some 40 times
+     * the size of the box.
+     */
+    #[Test]
+    public function it_keeps_only_the_associations_of_the_primary_item(): void
+    {
+        $entries = '';
+        for ($item = 2; $item < 170000; $item++) {
+            $entries .= pack('N', $item)."\1\1";
+        }
+
+        // The primary item comes last, and `pitm` after `iprp`.
+        $ipma = self::fullBox('ipma', 1, 0, pack('N', 170000).$entries.pack('N', 1)."\1\2");
+        $iprp = self::box('iprp', self::box('ipco', self::ispe(1, 1).self::ispe(300, 200)).$ipma);
+        $bytes = self::box('ftyp', 'heic'.pack('N', 0).'mif1heic')
+            .self::fullBox('meta', 0, 0, $iprp.self::fullBox('pitm', 0, 0, pack('n', 1)));
+
+        memory_reset_peak_usage();
+        $before = memory_get_usage();
+
+        $this->assertSame(['width' => 300, 'height' => 200], HeifDimensionsReader::fromString($bytes));
+        $this->assertLessThan(4 * strlen($bytes), memory_get_peak_usage() - $before);
+    }
+
+    #[Test]
+    public function it_reads_a_large_metadata_box_through_a_stream_wrapper(): void
+    {
+        [$ftyp, $meta] = self::splitAfterFtyp(self::heif([self::ispe(300, 200)], [1 => [1]]));
+        $content = substr($meta, 8, unpack('N', $meta)[1] - 8);
+        file_put_contents($this->tempFile, $ftyp.self::box('meta', $content.self::box('free', str_repeat("\0", 9000))));
+
+        // From such a stream, one fread() returns no more than 8 KiB.
+        $this->assertSame(
+            ['width' => 300, 'height' => 200],
+            HeifDimensionsReader::fromFile('php://filter/resource='.$this->tempFile),
+        );
     }
 
     #[Test]
