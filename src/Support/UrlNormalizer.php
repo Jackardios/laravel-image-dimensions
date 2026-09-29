@@ -52,11 +52,8 @@ final class UrlNormalizer
             return null;
         }
 
-        try {
-            return (string) $uri->withHost($host)->withFragment('');
-        } catch (InvalidArgumentException) {
-            return null;
-        }
+        // Such a host is valid for psr7 2.x and 3.x alike.
+        return (string) $uri->withHost($host)->withFragment('');
     }
 
     /**
