@@ -11,7 +11,7 @@
     "mutators": {
         "@default": true,
         // Equivalent mutants, each on the line its regex names:
-        // - chunk sizes and retry delays off by one change nothing observable;
+        // - retry delays off by one change nothing observable;
         // - "$limit + 1": reading two bytes past a cap instead of one still
         //   shows that it is exceeded;
         // - fstat() on an open file does not fail;
@@ -24,9 +24,9 @@
         "IncrementInteger": {
             "ignoreSourceCodeByRegex": [
                 ".*preg_split\\('/\\[\\\\s,\\]\\+/', \\$value, 5,.*",
-                ".*appendFromStream\\(\\$stream, 1048576\\).*",
                 ".*usleep\\(5000\\).*",
                 ".*StreamReader::read\\(\\$stream, \\$limit === null \\? PHP_INT_MAX : \\$limit \\+ 1 - strlen\\(\\$head\\)\\).*",
+                ".*appendFromStream\\(\\$stream, \\$limit === 0 \\? PHP_INT_MAX : \\$limit \\+ 1 - strlen\\(\\$head\\)\\).*",
                 ".*\\$stat === false \\? 0 :.*",
                 ".*return substr\\(\\$packed, 12, 4\\).*",
                 ".*self::uint32\\(\\$data, \\$offset \\+ 8\\) << 32.*"
@@ -34,7 +34,6 @@
         },
         "DecrementInteger": {
             "ignoreSourceCodeByRegex": [
-                ".*appendFromStream\\(\\$stream, 1048576\\).*",
                 ".*usleep\\(5000\\).*",
                 ".*\\$stat === false \\? 0 :.*",
                 ".*self::uint32\\(\\$data, \\$offset \\+ 8\\) << 32.*"

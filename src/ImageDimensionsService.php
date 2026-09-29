@@ -649,7 +649,7 @@ class ImageDimensionsService implements ImageDimensionsContract
             $this->inspectHeader($transfer, $temp, $expected);
         }
 
-        $this->assertWithinTransferLimit($transfer['svg'], $received);
+        $this->assertWithinCaps($transfer['svg'], $received);
     }
 
     /**
@@ -675,13 +675,15 @@ class ImageDimensionsService implements ImageDimensionsContract
 
         // The header was not enough. If the declared length is already over
         // the cap, fail now instead of downloading up to it.
-        $this->assertWithinTransferLimit($transfer['svg'], $expected);
+        $this->assertWithinCaps($transfer['svg'], $expected);
     }
 
     /**
+     * The SVG cap first: when both are exceeded, it is the stricter one.
+     *
      * @throws FileTooLargeException
      */
-    private function assertWithinTransferLimit(bool $svg, int $bytes): void
+    private function assertWithinCaps(bool $svg, int $bytes): void
     {
         if ($svg && $this->svgMaxFileSize > 0 && $bytes > $this->svgMaxFileSize) {
             throw FileTooLargeException::forSvg($this->svgMaxFileSize);
@@ -714,7 +716,7 @@ class ImageDimensionsService implements ImageDimensionsContract
 
             $svg ??= self::isMarkup($chunk);
             $temp->append($chunk);
-            $this->assertWithinTransferLimit($svg, $temp->bytesWritten());
+            $this->assertWithinCaps($svg, $temp->bytesWritten());
         }
     }
 
@@ -781,14 +783,7 @@ class ImageDimensionsService implements ImageDimensionsContract
             $limit = $this->svgReadLimit();
             $content = $head.StreamReader::read($stream, $limit === null ? PHP_INT_MAX : $limit + 1 - strlen($head));
 
-            // The SVG cap first: when both are exceeded, it is the stricter one.
-            if ($this->svgMaxFileSize > 0 && strlen($content) > $this->svgMaxFileSize) {
-                throw FileTooLargeException::forSvg($this->svgMaxFileSize);
-            }
-
-            if ($this->maxDownloadBytes > 0 && strlen($content) > $this->maxDownloadBytes) {
-                throw FileTooLargeException::forDownload($this->maxDownloadBytes);
-            }
+            $this->assertWithinCaps(true, strlen($content));
 
             return $this->svgExtractor->extract($content)->toArray();
         }
@@ -815,22 +810,9 @@ class ImageDimensionsService implements ImageDimensionsContract
             $temp->append($head);
             $limit = $this->maxDownloadBytes;
 
-            if ($limit > 0) {
-                // Read one byte past the cap so an overflow is detectable.
-                while ($temp->bytesWritten() <= $limit
-                    && $temp->appendFromStream($stream, $limit + 1 - $temp->bytesWritten()) > 0
-                ) {
-                    // keep reading
-                }
-
-                if ($temp->bytesWritten() > $limit) {
-                    throw FileTooLargeException::forDownload($limit);
-                }
-            } else {
-                while ($temp->appendFromStream($stream, 1048576) > 0) {
-                    // keep reading until the stream is exhausted
-                }
-            }
+            // One byte past the cap shows that it is exceeded.
+            $temp->appendFromStream($stream, $limit === 0 ? PHP_INT_MAX : $limit + 1 - strlen($head));
+            $this->assertWithinCaps(false, $temp->bytesWritten());
 
             return $this->analyzeFile($temp->path(), $label);
         } finally {
