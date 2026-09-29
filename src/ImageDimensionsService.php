@@ -1038,8 +1038,9 @@ class ImageDimensionsService implements ImageDimensionsContract
      */
     protected function getCacheKey(string $type, string|array $identity): string
     {
-        // JSON keeps the parts apart: "a:b" + "c" and "a" + "b:c" differ.
-        return "image_dimensions:v2:{$type}:".md5(is_string($identity) ? $identity : (string) json_encode($identity));
+        // Serialized, the parts stay apart ("a:b" + "c" and "a" + "b:c"
+        // differ), whatever bytes they hold.
+        return "image_dimensions:v2:{$type}:".md5(serialize($identity));
     }
 
     /**

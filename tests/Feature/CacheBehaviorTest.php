@@ -148,6 +148,22 @@ class CacheBehaviorTest extends TestCase
     }
 
     /**
+     * Regression: json_encode() fails on bytes that are not UTF-8, and every
+     * such source shared the key of an empty string. A local path can be
+     * any bytes on Linux; a disk name can be anywhere.
+     */
+    #[Test]
+    public function keys_of_names_that_are_not_utf8_differ(): void
+    {
+        $service = new ImageDimensionsService(['enable_cache' => true, 'cache_ttl' => 3600]);
+        $this->useInMemoryDisk("caf\xE9")->put('cat.png', $this->imageBytes(1, 2));
+        $this->useInMemoryDisk("na\xEFve")->put('cat.png', $this->imageBytes(3, 4));
+
+        $this->assertDimensions(1, 2, $service->fromStorage("caf\xE9", 'cat.png'));
+        $this->assertDimensions(3, 4, $service->fromStorage("na\xEFve", 'cat.png'));
+    }
+
+    /**
      * Regression: a cache hit on a cloud disk cost two remote calls, one to
      * check that the file exists and one for its modification time.
      */

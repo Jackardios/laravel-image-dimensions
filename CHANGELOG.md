@@ -85,8 +85,8 @@ migration steps.
   comma-separated string. `temp_dir` defaults to `null`, resolved at run time,
   so `config:cache` no longer bakes in the build machine's temp directory.
 - A local file is cached by its path, size, modification and change times and
-  inode, not just path and modification time. Storage keys JSON-encode the disk
-  and the path, so `a:b` + `c` and `a` + `b:c` no longer share an entry. A
+  inode, not just path and modification time. Storage keys keep the disk and
+  the path apart, so `a:b` + `c` and `a` + `b:c` no longer share an entry. A
   non-local disk costs one remote call per cache hit instead of two.
 - A cache entry that is not a pair of positive integers is a cache miss. A
   failing cache store is thrown as it is, by `tryFrom*()` as well.
