@@ -259,6 +259,55 @@ class HeifDimensionsReaderTest extends TestCase
     }
 
     #[Test]
+    public function it_looks_for_the_metadata_among_the_first_64_boxes(): void
+    {
+        [$ftyp, $meta] = self::splitAfterFtyp(self::heif([self::ispe(300, 200)], [1 => [1]]));
+
+        $bytes = $ftyp.str_repeat(self::box('free', ''), 62).$meta;
+        $this->assertSame(['width' => 300, 'height' => 200], HeifDimensionsReader::fromString($bytes));
+        $this->assertSame(['width' => 300, 'height' => 200], $this->fromFile($bytes));
+
+        $bytes = $ftyp.str_repeat(self::box('free', ''), 63).$meta;
+        $this->assertNull(HeifDimensionsReader::fromString($bytes));
+        $this->assertNull($this->fromFile($bytes));
+    }
+
+    #[Test]
+    public function it_looks_for_a_brand_in_the_first_4_kib(): void
+    {
+        [, $rest] = self::splitAfterFtyp(self::heif([self::ispe(300, 200)], [1 => [1]]));
+
+        // The brand ends at byte 4096, then starts there.
+        $bytes = self::box('ftyp', 'xxxx'.pack('N', 0).str_repeat('xxxx', 1019).'heic').$rest;
+        $this->assertSame(['width' => 300, 'height' => 200], HeifDimensionsReader::fromString($bytes));
+        $this->assertSame(['width' => 300, 'height' => 200], $this->fromFile($bytes));
+
+        $bytes = self::box('ftyp', 'xxxx'.pack('N', 0).str_repeat('xxxx', 1020).'heic').$rest;
+        $this->assertNull(HeifDimensionsReader::fromString($bytes));
+        $this->assertNull($this->fromFile($bytes));
+    }
+
+    /**
+     * Regression: each `ipma` box copied every association found before it.
+     */
+    #[Test]
+    public function it_reads_many_association_boxes_quickly(): void
+    {
+        $ipma = '';
+        for ($item = 2; $item < 30002; $item++) {
+            $ipma .= self::fullBox('ipma', 0, 0, pack('N', 1).pack('n', $item)."\0");
+        }
+
+        [$ftyp, $meta] = self::splitAfterFtyp(self::heif([self::ispe(300, 200)], [1 => [1]]));
+        $content = substr($meta, 8, unpack('N', $meta)[1] - 8);
+        $bytes = $ftyp.self::box('meta', $content.self::box('iprp', $ipma));
+        $started = microtime(true);
+
+        $this->assertSame(['width' => 300, 'height' => 200], HeifDimensionsReader::fromString($bytes));
+        $this->assertLessThan(1.0, microtime(true) - $started);
+    }
+
+    #[Test]
     public function it_reads_a_metadata_box_of_up_to_one_megabyte(): void
     {
         [$ftyp, $meta] = self::splitAfterFtyp(self::heif([self::ispe(300, 200)], [1 => [1]]));

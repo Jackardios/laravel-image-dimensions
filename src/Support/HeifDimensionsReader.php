@@ -28,6 +28,17 @@ final class HeifDimensionsReader
      */
     private const MAX_META_SIZE = 1048576;
 
+    /**
+     * Top-level boxes looked through for `meta`. It follows `ftyp`, perhaps
+     * after a `free` box or two, and comes before the image data.
+     */
+    private const MAX_TOP_LEVEL_BOXES = 64;
+
+    /**
+     * Bytes read for `ftyp`, which lists a few brands.
+     */
+    private const FTYP_READ_SIZE = 4096;
+
     private const MAX_DIMENSION = 2147483647;
 
     /**
@@ -40,9 +51,13 @@ final class HeifDimensionsReader
             return null;
         }
 
-        foreach (self::boxes($bytes, 0, strlen($bytes)) as [$type, $start, $end]) {
+        foreach (self::boxes($bytes, 0, strlen($bytes)) as $index => [$type, $start, $end]) {
             if ($type === 'meta') {
                 return $end - $start <= self::MAX_META_SIZE ? self::fromMeta(substr($bytes, $start, $end - $start)) : null;
+            }
+
+            if ($index === self::MAX_TOP_LEVEL_BOXES - 1) {
+                break;
             }
         }
 
@@ -60,8 +75,7 @@ final class HeifDimensionsReader
         }
 
         try {
-            // `ftyp` comes first and lists a few brands; 4 KiB is plenty.
-            if (! self::isHeif((string) @fread($handle, 4096))) {
+            if (! self::isHeif((string) @fread($handle, self::FTYP_READ_SIZE))) {
                 return null;
             }
 
@@ -70,8 +84,9 @@ final class HeifDimensionsReader
             $offset = 0;
 
             // Top-level box headers only; image data (`mdat`) is skipped.
-            while (@fseek($handle, $offset) === 0
-                && ($box = self::boxHeader((string) @fread($handle, 16), 0, $fileSize - $offset)) !== null
+            for ($index = 0; $index < self::MAX_TOP_LEVEL_BOXES
+                && @fseek($handle, $offset) === 0
+                && ($box = self::boxHeader((string) @fread($handle, 16), 0, $fileSize - $offset)) !== null; $index++
             ) {
                 [$type, $headerSize, $size] = $box;
 
@@ -105,7 +120,7 @@ final class HeifDimensionsReader
         }
 
         $size = self::uint32($bytes, 0);
-        $brands = substr($bytes, 8, 4).substr($bytes, 16, max(0, min($size, strlen($bytes)) - 16));
+        $brands = substr($bytes, 8, 4).substr($bytes, 16, max(0, min($size, strlen($bytes), self::FTYP_READ_SIZE) - 16));
 
         foreach (str_split($brands, 4) as $brand) {
             if (in_array($brand, self::BRANDS, true)) {
@@ -140,7 +155,7 @@ final class HeifDimensionsReader
                             $properties[] = $propertyType.substr($meta, $propertyStart, $propertyEnd - $propertyStart);
                         }
                     } elseif ($childType === 'ipma') {
-                        $associations = self::associations($meta, $childStart, $childEnd) + $associations;
+                        self::addAssociations($associations, $meta, $childStart, $childEnd);
                     }
                 }
             }
@@ -189,19 +204,18 @@ final class HeifDimensionsReader
     }
 
     /**
-     * Item property associations of an `ipma` box.
+     * Add the item property associations of an `ipma` box, replacing any
+     * earlier ones of the same item.
      *
-     * @return array<int, list<int>>
+     * @param  array<int, list<int>>  $associations
      */
-    private static function associations(string $data, int $start, int $end): array
+    private static function addAssociations(array &$associations, string $data, int $start, int $end): void
     {
         $version = ord($data[$start] ?? "\x00");
         $wideIndexes = (ord($data[$start + 3] ?? "\x00") & 1) === 1;
         $offset = $start + 4;
         $count = self::uint32($data, $offset);
         $offset += 4;
-
-        $associations = [];
 
         for ($entry = 0; $entry < $count && $offset < $end; $entry++) {
             if ($version < 1) {
@@ -229,8 +243,6 @@ final class HeifDimensionsReader
 
             $associations[$item] = $indexes;
         }
-
-        return $associations;
     }
 
     /**
