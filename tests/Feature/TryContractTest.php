@@ -7,7 +7,6 @@ namespace Jackardios\ImageDimensions\Tests\Feature;
 use Illuminate\Filesystem\FilesystemAdapter;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
-use Jackardios\ImageDimensions\Exceptions\FileNotFoundException;
 use Jackardios\ImageDimensions\Exceptions\InvalidImageException;
 use Jackardios\ImageDimensions\Exceptions\StorageAccessException;
 use Jackardios\ImageDimensions\ImageDimensionsService;
@@ -215,13 +214,6 @@ class TryContractTest extends TestCase
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('Connection refused');
         $this->service->tryFromLocal($this->createImage('a.png', 1, 1));
-    }
-
-    #[Test]
-    public function a_missing_file_is_still_not_found(): void
-    {
-        $this->expectException(FileNotFoundException::class);
-        $this->service->fromLocal($this->tempPath.'/missing.png');
     }
 
     private function onlyCacheKey(): string

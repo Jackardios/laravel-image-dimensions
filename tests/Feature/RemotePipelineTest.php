@@ -39,7 +39,7 @@ class RemotePipelineTest extends TestCase
      */
     private function makeService(array $overrides = []): ImageDimensionsService
     {
-        return new ImageDimensionsService(array_merge([
+        return new ImageDimensionsService(array_replace_recursive([
             'enable_cache' => false,
             'url' => ['allow_private_hosts' => true],
         ], $overrides));
@@ -193,7 +193,7 @@ class RemotePipelineTest extends TestCase
         }]);
 
         try {
-            $this->makeService(['url' => ['allow_private_hosts' => true, 'max_redirects' => 3]])->fromUrl($url);
+            $this->makeService(['url' => ['max_redirects' => 3]])->fromUrl($url);
             $this->fail('Expected a UrlAccessException.');
         } catch (UrlAccessException $e) {
             $this->assertSame("Could not open URL: {$url}", $e->getMessage());

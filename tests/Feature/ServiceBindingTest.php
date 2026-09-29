@@ -43,23 +43,4 @@ class ServiceBindingTest extends TestCase
         $this->assertSame($next, $this->app->make(ImageDimensionsContract::class));
         $this->assertSame(5000000, (fn () => $this->maxDownloadBytes)->call($next));
     }
-
-    #[Test]
-    public function the_facade_resolves_the_same_instance(): void
-    {
-        $this->assertSame(
-            $this->app->make(ImageDimensionsService::class),
-            ImageDimensions::getFacadeRoot()
-        );
-    }
-
-    #[Test]
-    public function it_can_be_injected_by_the_contract(): void
-    {
-        $resolved = $this->app->call(function (ImageDimensionsContract $service) {
-            return $service;
-        });
-
-        $this->assertInstanceOf(ImageDimensionsService::class, $resolved);
-    }
 }

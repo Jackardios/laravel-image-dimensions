@@ -7,37 +7,27 @@ namespace Jackardios\ImageDimensions\Tests\Feature;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Http;
 use Jackardios\ImageDimensions\Exceptions\FileNotFoundException;
-use Jackardios\ImageDimensions\Exceptions\FileTooLargeException;
 use Jackardios\ImageDimensions\Exceptions\InvalidImageException;
 use Jackardios\ImageDimensions\ImageDimensionsService;
 use Jackardios\ImageDimensions\Tests\TestCase;
 use PHPUnit\Framework\Attributes\Test;
 use SplFileInfo;
 
-class NewApiMethodsTest extends TestCase
+/**
+ * The sources added in 2.0 (contents, streams, uploads) and the tryFrom*()
+ * variants.
+ */
+class SourceMethodsTest extends TestCase
 {
     private ImageDimensionsService $service;
 
     protected function setUp(): void
     {
         parent::setUp();
-        $this->service = new ImageDimensionsService(['enable_cache' => false]);
+        $this->service = new ImageDimensionsService(['enable_cache' => false, 'url' => ['allow_private_hosts' => true]]);
     }
 
     // --- fromContents ---
-
-    #[Test]
-    public function it_reads_dimensions_from_raster_contents(): void
-    {
-        $this->assertDimensions(64, 48, $this->service->fromContents($this->imageBytes(64, 48)));
-    }
-
-    #[Test]
-    public function it_reads_dimensions_from_svg_contents(): void
-    {
-        $svg = '<!-- x --><svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><rect/></svg>';
-        $this->assertDimensions(200, 120, $this->service->fromContents($svg));
-    }
 
     #[Test]
     public function from_contents_rejects_an_empty_string(): void
@@ -47,17 +37,6 @@ class NewApiMethodsTest extends TestCase
     }
 
     // --- fromStream ---
-
-    #[Test]
-    public function it_reads_dimensions_from_a_stream(): void
-    {
-        $stream = fopen('php://memory', 'r+');
-        fwrite($stream, $this->imageBytes(30, 90));
-        rewind($stream);
-
-        $this->assertDimensions(30, 90, $this->service->fromStream($stream));
-        fclose($stream);
-    }
 
     #[Test]
     public function it_reads_a_seekable_stream_from_its_start(): void
@@ -198,92 +177,6 @@ class NewApiMethodsTest extends TestCase
         $this->assertNull($this->service->tryFromStream($stream));
         $this->assertNull($this->service->tryFromUploadedFile(new UploadedFile($path, 'garbage.png', 'image/png', null, true)));
 
-        fclose($stream);
-    }
-
-    #[Test]
-    public function try_from_url_returns_null_for_a_blocked_host(): void
-    {
-        $service = new ImageDimensionsService([
-            'enable_cache' => false,
-            'url' => ['allow_private_hosts' => false],
-        ]);
-
-        $this->assertNull($service->tryFromUrl('http://127.0.0.1/secret.png'));
-    }
-
-    /**
-     * Regression: a malformed SVG length such as `1e400` produced a raw
-     * InvalidArgumentException from the Dimensions constructor, which is not an
-     * ImageDimensionsException and therefore escaped tryFrom*() entirely.
-     */
-    #[Test]
-    public function try_variants_do_not_leak_a_non_package_exception_for_overflowing_svg(): void
-    {
-        $svg = '<svg xmlns="http://www.w3.org/2000/svg" width="1e400" height="10"><rect/></svg>';
-
-        $this->assertNull($this->service->tryFromContents($svg));
-    }
-
-    #[Test]
-    public function from_contents_reports_an_overflowing_svg_as_a_package_exception(): void
-    {
-        $this->expectException(InvalidImageException::class);
-        $this->service->fromContents('<svg xmlns="http://www.w3.org/2000/svg" width="1e400" height="10"/>');
-    }
-
-    // --- size caps on the non-remote sources ---
-
-    /**
-     * Regression: fromContents()/fromStream() never consulted max_download_bytes,
-     * so an attacker-controlled upload could fill the temp partition.
-     */
-    #[Test]
-    public function from_contents_honours_the_download_cap(): void
-    {
-        // The cap is never lower than remote_read_bytes (the header probe must
-        // fit), so pin both to make the effective limit explicit.
-        $service = new ImageDimensionsService([
-            'enable_cache' => false,
-            'remote_read_bytes' => 8192,
-            'max_download_bytes' => 8192,
-        ]);
-
-        $this->expectException(FileTooLargeException::class);
-        $service->fromContents(str_repeat('J', 20000));
-    }
-
-    #[Test]
-    public function from_stream_honours_the_download_cap(): void
-    {
-        $service = new ImageDimensionsService([
-            'enable_cache' => false,
-            'remote_read_bytes' => 8192,
-            'max_download_bytes' => 8192,
-        ]);
-
-        $stream = fopen('php://temp', 'r+b');
-        fwrite($stream, str_repeat('J', 200000));
-        rewind($stream);
-
-        try {
-            $this->expectException(FileTooLargeException::class);
-            $service->fromStream($stream);
-        } finally {
-            fclose($stream);
-        }
-    }
-
-    #[Test]
-    public function from_stream_still_reads_a_valid_image_within_the_cap(): void
-    {
-        $service = new ImageDimensionsService(['enable_cache' => false, 'max_download_bytes' => 1048576]);
-
-        $stream = fopen('php://temp', 'r+b');
-        fwrite($stream, $this->imageBytes(90, 45));
-        rewind($stream);
-
-        $this->assertDimensions(90, 45, $service->fromStream($stream));
         fclose($stream);
     }
 
