@@ -197,6 +197,8 @@ The host is resolved when a URL is actually fetched, not when a cached result is
 
 SVGs are parsed with `libxml` using `LIBXML_NONET` (no network access) and without entity substitution, so external entities are not expanded. Entity references in `width`, `height` and `viewBox` are rejected before they are read: libxml would expand them there without limit. Content that starts with markup always goes to this parser, never to `getimagesize()` (which parses SVG itself on PHP 8.5, without these checks). This package only reads the root element's geometry; it does **not** sanitise SVG markup for safe rendering. If you serve user-supplied SVGs to browsers, sanitise them separately.
 
+The whole SVG is parsed into a DOM tree, which libxml allocates outside PHP's `memory_limit`. A tree of many small elements takes about 30 times the file size: a 10MB SVG made of `<rect>`s took 0.3 s and about 300MB of memory on PHP 8.5, while PHP counted 24MB. If you measure SVGs uploaded by users, lower `svg.max_file_size` to what they actually need.
+
 ## Formats
 
 The format is recognised from the contents, never from the file name, extension or MIME type: a PNG named `logo.svg` is read as a PNG.
