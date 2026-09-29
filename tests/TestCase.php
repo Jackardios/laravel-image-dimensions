@@ -109,8 +109,9 @@ abstract class TestCase extends Orchestra
         // parallel test processes cannot see each other's entries.
         $app['config']->set('cache.stores.file.path', $this->tempPath.DIRECTORY_SEPARATOR.'cache');
 
-        // Fetch fake hosts such as example.com without resolving them. Tests
-        // of the SSRF guard pass their own configuration to the service.
+        // Fetch fake hosts such as example.com without resolving them. This
+        // configures the service the container builds; a test that builds
+        // its own passes the setting itself.
         $app['config']->set('image-dimensions.url.allow_private_hosts', true);
     }
 

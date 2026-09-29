@@ -44,7 +44,6 @@ interface ImageDimensions
     /**
      * Get image dimensions from raw binary image contents.
      *
-     * @throws TemporaryFileException
      * @throws InvalidImageException
      */
     public function fromContents(string $contents): Dimensions;

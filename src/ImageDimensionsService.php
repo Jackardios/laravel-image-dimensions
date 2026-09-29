@@ -310,7 +310,6 @@ class ImageDimensionsService implements ImageDimensionsContract
      *
      * The result is not cached (there is no stable identity to key on).
      *
-     * @throws TemporaryFileException
      * @throws InvalidImageException
      */
     public function fromContents(string $contents): Dimensions
@@ -1014,7 +1013,7 @@ class ImageDimensionsService implements ImageDimensionsContract
      * Get cached value or compute and cache.
      *
      * The callback returns a primitive `array{width, height}` so cache stores
-     * hold plain data (v1-compatible); the result is hydrated into a
+     * hold plain data, not a serialized object; the result is hydrated into a
      * {@see Dimensions} value object before returning.
      *
      * @param  Closure(): array{width: int, height: int}  $callback
