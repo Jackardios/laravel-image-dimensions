@@ -100,6 +100,8 @@ class UrlGuardTest extends TestCase
         return [
             'ipv4 public a' => ['8.8.8.8'],
             'ipv4 public b' => ['1.1.1.1'],
+            // Starts with the bytes of the 6to4 prefix, 2002::/16.
+            'ipv4 public, 32.2.0.0/16' => ['32.2.10.1'],
             'ipv6 public' => ['2606:4700:4700::1111'],
             'ipv6 public google' => ['2a00:1450:4001:800::200e'],
             // The transition-prefix checks must not over-block: these tunnel a

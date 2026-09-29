@@ -192,27 +192,12 @@ final class UrlGuard
             return true;
         }
 
-        if (strlen($packed) === 4) {
-            return $this->isBlockedIpv4($packed);
+        // Only an IPv6 address can carry an IPv4 one: 32.2.0.0 is no 6to4.
+        if (strlen($packed) === 16) {
+            $packed = $this->embeddedIpv4($packed) ?? $packed;
         }
 
-        $embedded = $this->embeddedIpv4($packed);
-        if ($embedded !== null) {
-            return $this->isBlockedIpv4($embedded);
-        }
-
-        foreach (self::BLOCKED_V6 as [$prefix, $bits]) {
-            if ($this->inPrefix($packed, (string) inet_pton($prefix), $bits)) {
-                return true;
-            }
-        }
-
-        return ! $this->isGlobal((string) inet_ntop($packed));
-    }
-
-    private function isBlockedIpv4(string $packed): bool
-    {
-        foreach (self::BLOCKED_V4 as [$prefix, $bits]) {
+        foreach (strlen($packed) === 4 ? self::BLOCKED_V4 : self::BLOCKED_V6 as [$prefix, $bits]) {
             if ($this->inPrefix($packed, (string) inet_pton($prefix), $bits)) {
                 return true;
             }
@@ -260,10 +245,6 @@ final class UrlGuard
      */
     private function inPrefix(string $packed, string $prefix, int $bits): bool
     {
-        if (strlen($packed) !== strlen($prefix)) {
-            return false;
-        }
-
         $wholeBytes = intdiv($bits, 8);
         if (strncmp($packed, $prefix, $wholeBytes) !== 0) {
             return false;
