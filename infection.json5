@@ -18,9 +18,12 @@
         // - substr($packed, 12, 4) is the end of a 16-byte string either way;
         // - a HEIF box's 64-bit size: the high word only matters for boxes
         //   over 4 GB, and shifting it by 31 or 33 bits, or reading it one
-        //   byte later, changes nothing for any smaller.
+        //   byte later, changes nothing for any smaller;
+        // - splitting a viewBox into at most six parts instead of five
+        //   rejects the same values: anything past the fourth is an error.
         "IncrementInteger": {
             "ignoreSourceCodeByRegex": [
+                ".*preg_split\\('/\\[\\\\s,\\]\\+/', \\$value, 5,.*",
                 ".*appendFromStream\\(\\$stream, 1048576\\).*",
                 ".*usleep\\(5000\\).*",
                 ".*StreamReader::read\\(\\$stream, \\$limit === null \\? PHP_INT_MAX : \\$limit \\+ 1 - strlen\\(\\$head\\)\\).*",

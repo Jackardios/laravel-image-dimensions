@@ -163,7 +163,8 @@ final class SvgDimensionsExtractor
      */
     private function parseViewBox(string $value): ?array
     {
-        $parts = preg_split('/[\s,]+/', $value, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        // A fifth part, if any, holds the rest: a long list is not split up.
+        $parts = preg_split('/[\s,]+/', $value, 5, PREG_SPLIT_NO_EMPTY) ?: [];
 
         if (count($parts) !== 4 || ! is_numeric($parts[2]) || ! is_numeric($parts[3])) {
             return null;

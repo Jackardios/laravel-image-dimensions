@@ -50,6 +50,7 @@ class SvgDimensionsTest extends TestCase
             'negative length falls back' => [['width' => '-100', 'height' => '50', 'viewBox' => '0 0 10 10'], 50, 50],
             'both sides set ignore the viewBox' => [['width' => '100', 'height' => '100', 'viewBox' => '0 0 200 50'], 100, 100],
             'viewBox with commas and padding' => [['viewBox' => ' 0,0 , 30,20 '], 30, 20],
+            'viewBox with a trailing comma' => [['viewBox' => '0 0 30 20,'], 30, 20],
             'noise below a millionth of a pixel is dropped' => [['width' => '1.0000001', 'height' => '1'], 1, 1],
             'a millionth of a pixel still rounds up' => [['width' => '1.000001', 'height' => '1'], 2, 1],
         ];
