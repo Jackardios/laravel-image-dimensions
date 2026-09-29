@@ -29,7 +29,7 @@ final class TemporaryFile
 
     private static bool $shutdownRegistered = false;
 
-    private string $path = '';
+    private string $path;
 
     /** @var resource|null */
     private $handle;
@@ -128,7 +128,6 @@ final class TemporaryFile
         }
 
         $this->bytesWritten += $bytes;
-        $this->flush();
     }
 
     /**
@@ -147,16 +146,6 @@ final class TemporaryFile
     }
 
     /**
-     * Flush buffered writes so the file on disk reflects everything written.
-     */
-    public function flush(): void
-    {
-        if (is_resource($this->handle)) {
-            @fflush($this->handle);
-        }
-    }
-
-    /**
      * Close and remove the file now, rather than when the object is
      * destroyed: callbacks handed to an HTTP client can keep it alive long
      * after the request.
@@ -169,7 +158,7 @@ final class TemporaryFile
 
         $this->handle = null;
 
-        if ($this->path !== '' && (@unlink($this->path) || ! file_exists($this->path))) {
+        if (@unlink($this->path) || ! file_exists($this->path)) {
             unset(self::$pending[$this->path]);
         }
     }
