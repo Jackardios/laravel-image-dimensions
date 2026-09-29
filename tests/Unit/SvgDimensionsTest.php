@@ -190,6 +190,17 @@ class SvgDimensionsTest extends TestCase
         $this->assertSame(['width' => 100, 'height' => 50], $this->service->fromLocal($path));
     }
 
+    #[Test]
+    public function it_takes_geometry_defaults_from_the_internal_dtd_subset(): void
+    {
+        // Such a default has no attribute node; asking the DOM for one
+        // used to throw a bare Error.
+        $path = $this->createFile('defaults.svg', '<!DOCTYPE svg [<!ATTLIST svg width CDATA "40" viewBox CDATA "0 0 4 1">]>'
+            .'<svg xmlns="http://www.w3.org/2000/svg"/>');
+
+        $this->assertSame(['width' => 40, 'height' => 10], $this->service->fromLocal($path));
+    }
+
     /**
      * @return array<string, array{0: string}>
      */

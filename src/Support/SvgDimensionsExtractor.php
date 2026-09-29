@@ -2,7 +2,6 @@
 
 namespace Jackardios\ImageDimensions\Support;
 
-use DOMAttr;
 use DOMDocument;
 use Jackardios\ImageDimensions\Exceptions\InvalidImageException;
 
@@ -79,9 +78,12 @@ final class SvgDimensionsExtractor
                 throw new InvalidImageException("Invalid SVG file: {$label}");
             }
 
-            foreach (self::GEOMETRY_ATTRIBUTES as $name) {
-                $attribute = $svg->getAttributeNode($name);
-                if (! $attribute instanceof DOMAttr) {
+            // Only the attributes written on the element: for a default from
+            // the internal DTD, getAttributeNode() gets the declaration, which
+            // PHP cannot wrap, and throws an Error.
+            foreach ($svg->attributes as $attribute) {
+                $name = $attribute->nodeName;
+                if (! in_array($name, self::GEOMETRY_ATTRIBUTES, true)) {
                     continue;
                 }
 
