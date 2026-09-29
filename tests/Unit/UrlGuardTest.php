@@ -186,9 +186,10 @@ class UrlGuardTest extends TestCase
     #[Test]
     public function an_allowlist_entry_may_be_an_ipv6_address(): void
     {
-        foreach (['2606:4700:4700::1111', '[2606:4700:4700::1111]'] as $entry) {
+        foreach (['2606:4700:4700::1111', '[2606:4700:4700::1111]', '2606:4700:4700:0:0:0:0:1111'] as $entry) {
             $guard = new UrlGuard(allowPrivateHosts: false, allowedHosts: [$entry]);
             $guard->assertAllowed('http://[2606:4700:4700::1111]/image.png');
+            $guard->assertAllowed('http://[2606:4700:4700:0::1111]/image.png');
 
             try {
                 $guard->assertAllowed('http://[2606:4700:4700::1112]/image.png');
@@ -197,6 +198,21 @@ class UrlGuardTest extends TestCase
                 $this->assertStringContainsString('is not in the configured allowlist', $e->getMessage());
             }
         }
+    }
+
+    /**
+     * psr7 2.x keeps a mapped address as written; 3.x writes it in hex.
+     */
+    #[Test]
+    public function an_allowlisted_mapped_address_matches_in_either_form(): void
+    {
+        foreach (['::ffff:1.2.3.4', '::ffff:102:304'] as $entry) {
+            $guard = new UrlGuard(allowPrivateHosts: false, allowedHosts: [$entry]);
+            $guard->assertAllowed('http://[::ffff:1.2.3.4]/image.png');
+            $guard->assertAllowed('http://[::FFFF:102:304]/image.png');
+        }
+
+        $this->addToAssertionCount(4);
     }
 
     /**

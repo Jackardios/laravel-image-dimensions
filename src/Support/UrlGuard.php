@@ -104,7 +104,7 @@ final class UrlGuard
             static function ($host): string {
                 $host = strtolower(trim((string) $host));
 
-                return UrlNormalizer::normalizeHost($host) ?? $host;
+                return self::bareHost(UrlNormalizer::normalizeHost($host) ?? $host);
             },
             $allowedHosts
         ), static fn (string $host) => $host !== ''));
@@ -139,12 +139,9 @@ final class UrlGuard
         }
 
         $host = strtolower($host);
-        $bareHost = trim($host, '[]'); // strip IPv6 literal brackets
+        $bareHost = self::bareHost($host);
 
-        if ($this->allowedHosts !== []
-            && ! in_array($host, $this->allowedHosts, true)
-            && ! in_array($bareHost, $this->allowedHosts, true)
-        ) {
+        if ($this->allowedHosts !== [] && ! in_array($bareHost, $this->allowedHosts, true)) {
             throw UrlNotAllowedException::notInAllowlist($host);
         }
 
@@ -249,6 +246,20 @@ final class UrlGuard
 
         return strncmp($packed, $prefix, $wholeBytes) === 0
             && (ord($packed[$wholeBytes] ?? "\0") & $mask) === (ord($prefix[$wholeBytes] ?? "\0") & $mask);
+    }
+
+    /**
+     * A host without IPv6 brackets, and an IPv6 address in one form: psr7
+     * 2.x keeps "[::ffff:127.0.0.1]" as written, 3.x makes it
+     * "[::ffff:7f00:1]".
+     */
+    private static function bareHost(string $host): string
+    {
+        $host = trim($host, '[]');
+
+        return filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false
+            ? (string) inet_ntop((string) inet_pton($host))
+            : $host;
     }
 
     /**
