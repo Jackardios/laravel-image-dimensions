@@ -271,6 +271,22 @@ class SvgDimensionsTest extends TestCase
     }
 
     #[Test]
+    public function it_rejects_a_long_number_quickly(): void
+    {
+        // The length pattern once backtracked through every digit: 100,000
+        // of them took seconds.
+        $path = $this->createFile('digits.svg', '<svg xmlns="http://www.w3.org/2000/svg" width="'.str_repeat('1', 100000).'x" height="1"/>');
+        $started = microtime(true);
+
+        try {
+            $this->service->fromLocal($path);
+            $this->fail('The width must be rejected.');
+        } catch (InvalidImageException) {
+            $this->assertLessThan(1.0, microtime(true) - $started);
+        }
+    }
+
+    #[Test]
     public function it_ignores_entity_references_outside_the_geometry_attributes(): void
     {
         $path = $this->createFile('title.svg', '<!DOCTYPE svg [<!ENTITY t "Title">]>'

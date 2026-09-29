@@ -144,7 +144,8 @@ final class SvgDimensionsExtractor
     {
         $value = trim($value);
 
-        if (! preg_match('/^\+?(?<number>\d*\.?\d+(?:e[+-]?\d+)?)\s*(?<unit>px|pt|pc|in|cm|mm)?$/i', $value, $m)) {
+        // Possessive: a long run of digits must not be backtracked through.
+        if (! preg_match('/^\+?(?<number>(?:\d*\.)?+\d++(?:e[+-]?+\d++)?+)\s*+(?<unit>px|pt|pc|in|cm|mm)?$/i', $value, $m)) {
             return null;
         }
 
