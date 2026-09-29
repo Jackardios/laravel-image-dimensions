@@ -9,6 +9,7 @@ use Jackardios\ImageDimensions\Support\UrlGuard;
 use Jackardios\ImageDimensions\Tests\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Test;
+use ReflectionClassConstant;
 
 class UrlGuardTest extends TestCase
 {
@@ -82,6 +83,40 @@ class UrlGuardTest extends TestCase
             '6to4 relay anycast' => ['192.88.99.1'],
             'not an ip' => ['localhost'],
         ];
+    }
+
+    /**
+     * The lists alone, without PHP's own verdict, which covers most of the
+     * same ranges: every range holds its first and last address and neither
+     * neighbour.
+     */
+    #[Test]
+    public function every_listed_range_ends_where_it_should(): void
+    {
+        $guard = new UrlGuard;
+        $inPrefix = fn (string $packed, string $prefix, int $bits): bool => $this->inPrefix($packed, $prefix, $bits);
+
+        foreach (['BLOCKED_V4', 'BLOCKED_V6'] as $list) {
+            foreach ((new ReflectionClassConstant(UrlGuard::class, $list))->getValue() as [$address, $bits]) {
+                $first = (string) inet_pton($address);
+                $last = $first;
+                for ($bit = strlen($first) * 8 - 1; $bit >= $bits; $bit--) {
+                    $last[intdiv($bit, 8)] = chr(ord($last[intdiv($bit, 8)]) | (0x80 >> ($bit % 8)));
+                }
+
+                $range = "{$address}/{$bits}";
+                $this->assertTrue($inPrefix->call($guard, $first, $first, $bits), $range);
+                $this->assertTrue($inPrefix->call($guard, $last, $first, $bits), $range);
+
+                if (($below = self::step($first, -1)) !== null) {
+                    $this->assertFalse($inPrefix->call($guard, $below, $first, $bits), "{$range}: ".inet_ntop($below));
+                }
+
+                if (($above = self::step($last, 1)) !== null) {
+                    $this->assertFalse($inPrefix->call($guard, $above, $first, $bits), "{$range}: ".inet_ntop($above));
+                }
+            }
+        }
     }
 
     #[Test]
@@ -331,5 +366,22 @@ class UrlGuardTest extends TestCase
 
         $this->expectException(UrlNotAllowedException::class);
         $onRedirect(null, null, 'http://127.0.0.1/internal');
+    }
+
+    /**
+     * The packed address one above or below, or null past either end.
+     */
+    private static function step(string $packed, int $delta): ?string
+    {
+        for ($byte = strlen($packed) - 1; $byte >= 0; $byte--) {
+            $value = ord($packed[$byte]) + $delta;
+            $packed[$byte] = chr(($value + 256) % 256);
+
+            if ($value >= 0 && $value <= 255) {
+                return $packed;
+            }
+        }
+
+        return null;
     }
 }

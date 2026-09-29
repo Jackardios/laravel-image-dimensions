@@ -212,11 +212,8 @@ final class UrlGuard
      */
     private function isGlobal(string $ip): bool
     {
-        return filter_var(
-            $ip,
-            FILTER_VALIDATE_IP,
-            FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE | FILTER_FLAG_GLOBAL_RANGE
-        ) !== false;
+        // The global range excludes the private and reserved ones as well.
+        return filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_GLOBAL_RANGE) !== false;
     }
 
     /**
@@ -246,18 +243,12 @@ final class UrlGuard
     private function inPrefix(string $packed, string $prefix, int $bits): bool
     {
         $wholeBytes = intdiv($bits, 8);
-        if (strncmp($packed, $prefix, $wholeBytes) !== 0) {
-            return false;
-        }
+        // The leading bits of the next byte that the prefix covers; none
+        // (a mask of 0xFF00) when it ends on a byte boundary.
+        $mask = 0xFF << (8 - $bits % 8);
 
-        $remainingBits = $bits % 8;
-        if ($remainingBits === 0) {
-            return true;
-        }
-
-        $mask = (0xFF << (8 - $remainingBits)) & 0xFF;
-
-        return (ord($packed[$wholeBytes]) & $mask) === (ord($prefix[$wholeBytes]) & $mask);
+        return strncmp($packed, $prefix, $wholeBytes) === 0
+            && (ord($packed[$wholeBytes] ?? "\0") & $mask) === (ord($prefix[$wholeBytes] ?? "\0") & $mask);
     }
 
     /**
