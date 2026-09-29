@@ -138,11 +138,13 @@ class TemporaryFileTest extends TestCase
 
         try {
             $temp = new TemporaryFile($this->tempPath);
+            $umask = umask();
         } finally {
             umask($previous);
         }
 
         $this->assertSame(0600, fileperms($temp->path()) & 0777);
+        $this->assertSame(0022, $umask, 'The umask is restored.');
     }
 
     /**

@@ -48,18 +48,22 @@ final class TemporaryFile
         // create the file in the one it was given; fopen() fails instead.
         $base = rtrim($directory, '/\\').DIRECTORY_SEPARATOR.$prefix;
         $handle = false;
-        for ($attempt = 0; $attempt < 3 && $handle === false; $attempt++) {
-            $path = $base.bin2hex(random_bytes(8));
-            // "x": create the file, never open an existing one.
-            $handle = @fopen($path, 'xb');
+        // Owner only from the start, as tempnam() makes it: the contents are
+        // downloads, and a chmod() afterwards leaves a window to open it.
+        $umask = umask(0077);
+        try {
+            for ($attempt = 0; $attempt < 3 && $handle === false; $attempt++) {
+                $path = $base.bin2hex(random_bytes(8));
+                // "x": create the file, never open an existing one.
+                $handle = @fopen($path, 'xb');
+            }
+        } finally {
+            umask($umask);
         }
 
         if ($handle === false) {
             throw TemporaryFileException::couldNotCreate();
         }
-
-        // Owner only, as tempnam() made it: the contents are downloads.
-        @chmod($path, 0600);
 
         $this->path = $path;
         $this->handle = $handle;
