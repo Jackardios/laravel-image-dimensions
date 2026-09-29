@@ -230,6 +230,50 @@ class HeifDimensionsReaderTest extends TestCase
         }
     }
 
+    /**
+     * A box that claims more than its parent holds ends the walk: its size
+     * must neither overflow an offset nor let a loop run on past the data.
+     */
+    #[Test]
+    public function it_stops_at_a_box_larger_than_its_parent(): void
+    {
+        $ftyp = self::box('ftyp', 'heic'.pack('N', 0).'mif1heic');
+        // 20 million associations in a box of 1 TB: walking them takes seconds.
+        $ipma = pack('N', 1).'ipma'.pack('J', 1 << 40)."\0\0\0\0".pack('N', 20000000);
+
+        foreach ([1 << 40, PHP_INT_MAX] as $size) {
+            $iprp = pack('N', 1).'iprp'.pack('J', $size).$ipma;
+            $bytes = $ftyp.self::fullBox('meta', 0, 0, self::fullBox('pitm', 0, 0, pack('n', 1)).$iprp);
+            $started = microtime(true);
+
+            $this->assertNull(HeifDimensionsReader::fromString($bytes));
+            $this->assertNull($this->fromFile($bytes));
+            $this->assertLessThan(1.0, microtime(true) - $started);
+        }
+
+        [, $meta] = self::splitAfterFtyp(self::heif([self::ispe(300, 200)], [1 => [1]]));
+        $bytes = $ftyp.pack('N', 1).'free'.pack('J', PHP_INT_MAX).$meta;
+
+        $this->assertNull(HeifDimensionsReader::fromString($bytes));
+        $this->assertNull($this->fromFile($bytes));
+    }
+
+    #[Test]
+    public function it_reads_a_metadata_box_of_up_to_one_megabyte(): void
+    {
+        [$ftyp, $meta] = self::splitAfterFtyp(self::heif([self::ispe(300, 200)], [1 => [1]]));
+        $content = substr($meta, 8, unpack('N', $meta)[1] - 8);
+        $padding = 1048576 - strlen($content) - 8;
+
+        $bytes = $ftyp.self::box('meta', $content.self::box('free', str_repeat("\0", $padding)));
+        $this->assertSame(['width' => 300, 'height' => 200], HeifDimensionsReader::fromString($bytes));
+        $this->assertSame(['width' => 300, 'height' => 200], $this->fromFile($bytes));
+
+        $bytes = $ftyp.self::box('meta', $content.self::box('free', str_repeat("\0", $padding + 1)));
+        $this->assertNull(HeifDimensionsReader::fromString($bytes));
+        $this->assertNull($this->fromFile($bytes));
+    }
+
     #[Test]
     public function it_reads_a_metadata_box_that_extends_to_the_end(): void
     {

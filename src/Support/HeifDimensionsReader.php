@@ -42,7 +42,7 @@ final class HeifDimensionsReader
 
         foreach (self::boxes($bytes, 0, strlen($bytes)) as [$type, $start, $end]) {
             if ($type === 'meta') {
-                return $end <= strlen($bytes) ? self::fromMeta(substr($bytes, $start, $end - $start)) : null;
+                return $end - $start <= self::MAX_META_SIZE ? self::fromMeta(substr($bytes, $start, $end - $start)) : null;
             }
         }
 
@@ -65,21 +65,17 @@ final class HeifDimensionsReader
                 return null;
             }
 
+            $stat = @fstat($handle);
+            $fileSize = $stat === false ? 0 : $stat['size'];
             $offset = 0;
 
             // Top-level box headers only; image data (`mdat`) is skipped.
             while (@fseek($handle, $offset) === 0
-                && ($box = self::boxHeader((string) @fread($handle, 16), 0, PHP_INT_MAX)) !== null
+                && ($box = self::boxHeader((string) @fread($handle, 16), 0, $fileSize - $offset)) !== null
             ) {
                 [$type, $headerSize, $size] = $box;
 
                 if ($type === 'meta') {
-                    if ($size === null) {
-                        // A size of zero: the box extends to the end of the file.
-                        $stat = @fstat($handle);
-                        $size = $stat === false ? 0 : $stat['size'] - $offset;
-                    }
-
                     $length = $size - $headerSize;
 
                     // Version and flags come first; anything shorter is broken.
@@ -91,10 +87,6 @@ final class HeifDimensionsReader
                     $meta = (string) @fread($handle, $length);
 
                     return strlen($meta) === $length ? self::fromMeta($meta) : null;
-                }
-
-                if ($size === null) {
-                    return null; // extends to the end of the file
                 }
 
                 $offset += $size;
@@ -242,34 +234,33 @@ final class HeifDimensionsReader
     }
 
     /**
-     * Child boxes between two offsets. The last one may extend past $end
-     * (a truncated read); callers check.
+     * Child boxes between two offsets, up to the first that does not fit.
      *
      * @return iterable<array{0: string, 1: int, 2: int}> Type, content start, box end.
      */
     private static function boxes(string $data, int $offset, int $end): iterable
     {
-        while ($offset + 8 <= $end && ($box = self::boxHeader($data, $offset, $end)) !== null) {
+        while (($box = self::boxHeader($data, $offset, $end)) !== null) {
             [$type, $headerSize, $size] = $box;
-            $boxEnd = $size === null ? $end : $offset + $size;
 
-            yield [$type, $offset + $headerSize, $boxEnd];
+            yield [$type, $offset + $headerSize, $offset + $size];
 
-            $offset = $boxEnd;
+            $offset += $size;
         }
     }
 
     /**
-     * Bytes missing at the end of $data read as zeros: a truncated header
-     * gives a size that callers find does not fit what they have.
+     * The header of the box at $offset, or null if the box does not fit
+     * before $end. Bytes missing at the end of $data read as zeros, so a
+     * truncated header does not fit either.
      *
-     * @return array{0: string, 1: int, 2: int|null}|null Type, header size and
-     *                                                    box size (null: to the end).
+     * @return array{0: string, 1: int, 2: int}|null Type, header size and box size.
      */
     private static function boxHeader(string $data, int $offset, int $end): ?array
     {
         $size = self::uint32($data, $offset);
         $type = substr($data, $offset + 4, 4);
+        $headerSize = 8;
 
         if ($size === 1) {
             // A size of 2^63 or more wraps around to a negative one, which
@@ -277,12 +268,11 @@ final class HeifDimensionsReader
             $size = (self::uint32($data, $offset + 8) << 32) | self::uint32($data, $offset + 12);
             $headerSize = 16;
         } elseif ($size === 0) {
-            return $end === PHP_INT_MAX ? [$type, 8, null] : [$type, 8, $end - $offset];
-        } else {
-            $headerSize = 8;
+            // The box extends to the end.
+            $size = $end - $offset;
         }
 
-        return $size >= $headerSize ? [$type, $headerSize, $size] : null;
+        return $size >= $headerSize && $size <= $end - $offset ? [$type, $headerSize, $size] : null;
     }
 
     private static function ratio(int $numerator, int $denominator): ?int
