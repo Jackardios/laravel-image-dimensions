@@ -213,6 +213,7 @@ class SvgDimensionsTest extends TestCase
             'width' => ['<svg xmlns="http://www.w3.org/2000/svg" width="&n;" height="5"/>'],
             'height' => ['<svg xmlns="http://www.w3.org/2000/svg" width="5" height="&n;"/>'],
             'viewBox' => ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 &n; &n;"/>'],
+            'after another attribute' => ['<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="&n;" height="5"/>'],
         ];
     }
 
