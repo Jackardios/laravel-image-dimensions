@@ -317,6 +317,29 @@ class SvgDimensionsTest extends TestCase
     }
 
     #[Test]
+    public function it_looks_for_markup_in_the_first_kilobyte(): void
+    {
+        $svg = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="5"/>';
+        $inside = str_repeat(' ', 1023).$svg;
+        $outside = str_repeat(' ', 1024).$svg;
+
+        $this->assertDimensions(10, 5, $this->service->fromLocal($this->createFile('inside.svg', $inside)));
+        $this->assertDimensions(10, 5, $this->service->fromContents($inside));
+
+        foreach ([
+            'file' => fn () => $this->service->fromLocal($this->createFile('outside.svg', $outside)),
+            'contents' => fn () => $this->service->fromContents($outside),
+        ] as $source => $measure) {
+            try {
+                $measure();
+                $this->fail("{$source}: markup past the first kilobyte must not be read.");
+            } catch (InvalidImageException $e) {
+                $this->assertStringContainsString('Could not determine image dimensions', $e->getMessage(), $source);
+            }
+        }
+    }
+
+    #[Test]
     public function it_recognises_svg_with_a_bom_and_leading_whitespace(): void
     {
         $path = $this->createFile('bom', "\xEF\xBB\xBF\n  <svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1in\" height=\"2in\"/>");

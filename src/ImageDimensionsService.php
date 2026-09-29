@@ -388,10 +388,7 @@ class ImageDimensionsService implements ImageDimensionsContract
      */
     public function fromUploadedFile(SplFileInfo $file): Dimensions
     {
-        $path = $file->getRealPath();
-        if ($path === false || $path === '') {
-            $path = $file->getPathname();
-        }
+        $path = $file->getRealPath() ?: $file->getPathname();
 
         // An upload is named by its client name: its temporary path on the
         // server means nothing to the user and should not be shown to them.
@@ -399,7 +396,7 @@ class ImageDimensionsService implements ImageDimensionsContract
             ? ($file->getClientOriginalName() ?: $path)
             : $path;
 
-        if ($path === '' || ! is_file($path)) {
+        if (! is_file($path)) {
             throw FileNotFoundException::forLocal($label);
         }
 
@@ -909,7 +906,8 @@ class ImageDimensionsService implements ImageDimensionsContract
             throw InvalidImageException::forPath($label, 'File is empty.');
         }
 
-        if ($this->startsWithMarkup($path)) {
+        // Judged by the first kilobyte, as isMarkup() judges a header.
+        if (SvgDimensionsExtractor::startsWithMarkup((string) @file_get_contents($path, false, null, 0, 1024))) {
             // Checked before the document is read.
             if ($this->svgMaxFileSize > 0 && $fileSize > $this->svgMaxFileSize) {
                 throw FileTooLargeException::forSvg($this->svgMaxFileSize);
@@ -1010,23 +1008,6 @@ class ImageDimensionsService implements ImageDimensionsContract
         }
 
         return ['width' => $size[0], 'height' => $size[1]];
-    }
-
-    /**
-     * Whether a file starts with markup, i.e. is SVG (or some other XML or
-     * HTML document the SVG parser will reject).
-     */
-    private function startsWithMarkup(string $path): bool
-    {
-        $handle = @fopen($path, 'rb');
-        if ($handle === false) {
-            return false;
-        }
-
-        $head = @fread($handle, 1024);
-        @fclose($handle);
-
-        return is_string($head) && SvgDimensionsExtractor::startsWithMarkup($head);
     }
 
     /**
