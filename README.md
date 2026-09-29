@@ -151,10 +151,10 @@ All exceptions extend `Jackardios\ImageDimensions\Exceptions\ImageDimensionsExce
 | --- | --- | --- |
 | `ImageDimensionsException` | `\Exception` | Base type for every exception below. |
 | `FileNotFoundException` | `ImageDimensionsException` | The local or storage path does not exist. |
-| `InvalidImageException` | `ImageDimensionsException` | The source is empty, not a supported image, or its dimensions cannot be determined. |
+| `InvalidImageException` | `ImageDimensionsException` | The source is empty, not a supported image, or its dimensions cannot be determined; or the URL is invalid or not `http`/`https`. |
 | `FileTooLargeException` | `InvalidImageException` | An SVG exceeds `svg.max_file_size`, or a download exceeds `max_download_bytes`. |
 | `UrlAccessException` | `ImageDimensionsException` | The URL could not be fetched (connection error, timeout, non-2xx status). |
-| `UrlNotAllowedException` | `UrlAccessException` | The URL is blocked by the SSRF guard (private/reserved host, disallowed scheme, or not in the allowlist). |
+| `UrlNotAllowedException` | `UrlAccessException` | The URL or a redirect is blocked by the SSRF guard (private/reserved host, or not in the allowlist). |
 | `StorageAccessException` | `ImageDimensionsException` | The file stream could not be read from the storage disk. |
 | `TemporaryFileException` | `ImageDimensionsException` | A temporary file could not be created or written (usually a permissions problem). |
 

@@ -24,11 +24,10 @@ use Jackardios\ImageDimensions\Exceptions\InvalidImageException;
 final class SvgDimensionsExtractor
 {
     /**
-     * Largest accepted pixel dimension.
-     *
-     * Values above this (including INF from something like `1e400`) cannot be
-     * cast to int without wrapping to a garbage or negative number, so they are
-     * rejected rather than silently corrupted.
+     * Largest accepted pixel dimension, the largest 32-bit integer: no image
+     * is larger, and a larger value (up to INF from `1e400`) cannot be cast
+     * to int on every platform. A longer width or height is ignored, like a
+     * percentage.
      */
     private const MAX_DIMENSION = 2147483647;
 
