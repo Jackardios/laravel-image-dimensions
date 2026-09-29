@@ -506,7 +506,7 @@ class ImageDimensionsService implements ImageDimensionsContract
      * arrived, the header is inspected and the transfer is cut short if it
      * already gives the dimensions; otherwise it continues up to the download
      * cap. An error response is abandoned once its headers arrive, and a
-     * redirect body is never inspected, though the cap applies to it too.
+     * redirect body is never inspected, though it counts towards the cap.
      *
      * @return array{width: int, height: int}
      *
@@ -520,7 +520,7 @@ class ImageDimensionsService implements ImageDimensionsContract
     protected function getDimensionsFromUrl(string $url): array
     {
         $temp = new TemporaryFile($this->tempDir, 'imgdim_url_');
-        $transfer = ['status' => 0, 'inspected' => false, 'svg' => false];
+        $transfer = ['status' => 0, 'inspected' => false, 'svg' => false, 'earlier' => 0];
 
         $options = [
             ...$this->requestOptions(),
@@ -533,10 +533,15 @@ class ImageDimensionsService implements ImageDimensionsContract
                     throw UrlAccessException::couldNotOpen($url, null, $response->getStatusCode());
                 }
 
-                // A hop with an empty body never reopens the file, which then
-                // still holds the previous hop's body.
+                // The file still holds the previous hop's body: the download
+                // cap is for the whole redirect chain.
+                clearstatcache(true, $temp->path());
+                $earlier = $transfer['earlier'] + (int) @filesize($temp->path());
+
+                // A hop with an empty body never reopens the file, which would
+                // then still hold that body.
                 $temp->truncate();
-                $transfer = ['status' => $response->getStatusCode(), 'inspected' => false, 'svg' => false];
+                $transfer = ['status' => $response->getStatusCode(), 'inspected' => false, 'svg' => false, 'earlier' => $earlier];
             },
             'progress' => function (int $expected, int $received) use (&$transfer, $temp): void {
                 $this->inspectTransfer($transfer, $temp, $expected, $received);
@@ -636,7 +641,7 @@ class ImageDimensionsService implements ImageDimensionsContract
      * Progress callback of a URL transfer: enforce the size caps and stop the
      * transfer as soon as the header gives the dimensions.
      *
-     * @param  array{status: int, inspected: bool, svg: bool}  $transfer
+     * @param  array{status: int, inspected: bool, svg: bool, earlier: int}  $transfer
      *
      * @throws FileTooLargeException
      * @throws TransferStopped
@@ -648,11 +653,11 @@ class ImageDimensionsService implements ImageDimensionsContract
             $this->inspectHeader($transfer, $temp, $expected);
         }
 
-        $this->assertWithinCaps($transfer['svg'], $received);
+        $this->assertWithinCaps($transfer['svg'], $received, $transfer['earlier']);
     }
 
     /**
-     * @param  array{status: int, inspected: bool, svg: bool}  $transfer
+     * @param  array{status: int, inspected: bool, svg: bool, earlier: int}  $transfer
      *
      * @throws FileTooLargeException
      * @throws TransferStopped
@@ -674,21 +679,24 @@ class ImageDimensionsService implements ImageDimensionsContract
 
         // The header was not enough. If the declared length is already over
         // the cap, fail now instead of downloading up to it.
-        $this->assertWithinCaps($transfer['svg'], $expected);
+        $this->assertWithinCaps($transfer['svg'], $expected, $transfer['earlier']);
     }
 
     /**
      * The SVG cap first: when both are exceeded, it is the stricter one.
      *
+     * @param  int  $bytes  The size of the body.
+     * @param  int  $earlier  Bytes downloaded before it, for earlier redirects.
+     *
      * @throws FileTooLargeException
      */
-    private function assertWithinCaps(bool $svg, int $bytes): void
+    private function assertWithinCaps(bool $svg, int $bytes, int $earlier = 0): void
     {
         if ($svg && $this->svgMaxFileSize > 0 && $bytes > $this->svgMaxFileSize) {
             throw FileTooLargeException::forSvg($this->svgMaxFileSize);
         }
 
-        if ($this->maxDownloadBytes > 0 && $bytes > $this->maxDownloadBytes) {
+        if ($this->maxDownloadBytes > 0 && $earlier + $bytes > $this->maxDownloadBytes) {
             throw FileTooLargeException::forDownload($this->maxDownloadBytes);
         }
     }

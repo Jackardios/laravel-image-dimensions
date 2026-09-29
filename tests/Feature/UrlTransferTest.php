@@ -202,6 +202,23 @@ class UrlTransferTest extends TestCase
     }
 
     #[Test]
+    public function the_download_cap_applies_to_the_whole_redirect_chain(): void
+    {
+        $chain = static fn (int $tail): string => '/redirect?'.http_build_query([
+            'tail' => $tail,
+            'to' => '/redirect?'.http_build_query(['tail' => $tail]),
+        ]);
+        $service = $this->service(['max_download_bytes' => 1048576]);
+
+        // Twice 400KB fits.
+        $this->assertDimensions(33, 44, $service->fromUrl(self::$server->url($chain(400000))));
+
+        // Twice 600KB does not, though each body does.
+        $this->expectException(FileTooLargeException::class);
+        $service->fromUrl(self::$server->url($chain(600000)));
+    }
+
+    #[Test]
     public function a_redirect_that_is_not_followed_is_an_error(): void
     {
         // 300, the lowest redirect status, with a body longer than the
