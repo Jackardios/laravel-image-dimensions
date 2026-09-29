@@ -6,6 +6,7 @@ namespace Jackardios\ImageDimensions;
 
 use Closure;
 use Illuminate\Contracts\Filesystem\Filesystem;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Client\StrayRequestException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -508,7 +509,8 @@ class ImageDimensionsService implements ImageDimensionsContract
      * The body goes straight to a temporary file. Once remote_read_bytes have
      * arrived, the header is inspected and the transfer is cut short if it
      * already gives the dimensions; otherwise it continues up to the download
-     * cap. Redirect and error bodies are never inspected.
+     * cap. An error response is abandoned once its headers arrive, and a
+     * redirect body is never inspected, though the cap applies to it too.
      *
      * @return array{width: int, height: int}
      *
@@ -530,7 +532,11 @@ class ImageDimensionsService implements ImageDimensionsContract
             // so empties) the file, and a handle would be closed along with
             // the discarded redirect response.
             'sink' => $temp->path(),
-            'on_headers' => function (ResponseInterface $response) use (&$transfer, $temp): void {
+            'on_headers' => function (ResponseInterface $response) use (&$transfer, $temp, $url): void {
+                if ($response->getStatusCode() >= 400) {
+                    throw UrlAccessException::couldNotOpen($url, null, $response->getStatusCode());
+                }
+
                 // A hop with an empty body never reopens the file, which then
                 // still holds the previous hop's body.
                 $temp->truncate();
@@ -574,6 +580,12 @@ class ImageDimensionsService implements ImageDimensionsContract
                 throw $own;
             }
 
+            if ($e instanceof RequestException) {
+                // An error status: Laravel reports it in place of the
+                // exception that abandoned the transfer.
+                throw UrlAccessException::couldNotOpen($url, $e, $e->response->status());
+            }
+
             if ($e instanceof StrayRequestException) {
                 // A test that forgot to fake this URL; not a package failure.
                 throw $e;
@@ -583,7 +595,8 @@ class ImageDimensionsService implements ImageDimensionsContract
             throw UrlAccessException::couldNotOpen($url, $e);
         }
 
-        if ($response->failed()) {
+        // A redirect that was not followed (no Location, say) is no image either.
+        if (! $response->successful()) {
             throw UrlAccessException::couldNotOpen($url, null, $response->status());
         }
 
@@ -634,11 +647,7 @@ class ImageDimensionsService implements ImageDimensionsContract
      */
     private function inspectTransfer(array &$transfer, TemporaryFile $temp, int $expected, int $received): void
     {
-        if ($transfer['status'] < 200 || $transfer['status'] >= 300) {
-            return;
-        }
-
-        if (! $transfer['inspected'] && $received >= $this->remoteReadBytes) {
+        if ($transfer['status'] < 300 && ! $transfer['inspected'] && $received >= $this->remoteReadBytes) {
             $transfer['inspected'] = true;
             $this->inspectHeader($transfer, $temp, $expected);
         }

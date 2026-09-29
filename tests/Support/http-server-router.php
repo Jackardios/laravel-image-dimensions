@@ -103,10 +103,23 @@ switch ($path) {
         $trickle(str_repeat("\x01", 1000), 0.2);
         break;
 
-        // A redirect whose own body is an image, which must not be measured.
+        // A redirect whose own body is an image, which must not be measured,
+        // followed by ?tail bytes.
     case '/redirect':
         header('Location: '.($query['to'] ?? '/png?w=33&h=44'), true, 302);
         echo $png(7, 7);
+        $zeros((int) ($query['tail'] ?? 0));
+        break;
+
+        // An image under the status ?code, without a Location, followed by
+        // ?tail bytes. With ?slow, it arrives one byte at a time.
+    case '/status':
+        http_response_code((int) ($query['code'] ?? 200));
+        $body = $png(7, 7);
+        $tail = (int) ($query['tail'] ?? 0);
+        header('Content-Length: '.(strlen($body) + $tail));
+        isset($query['slow']) ? $trickle($body, 0.2) : print $body;
+        $zeros($tail);
         break;
 
     case '/empty':

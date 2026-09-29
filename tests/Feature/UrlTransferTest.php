@@ -179,6 +179,52 @@ class UrlTransferTest extends TestCase
     }
 
     #[Test]
+    public function a_redirect_body_longer_than_the_header_read_is_not_measured(): void
+    {
+        $this->assertDimensions(33, 44, $this->service()->fromUrl(self::$server->url('/redirect?tail=200000')));
+    }
+
+    #[Test]
+    public function the_download_cap_applies_to_a_redirect_body(): void
+    {
+        $this->expectException(FileTooLargeException::class);
+        $this->service(['max_download_bytes' => 1048576])->fromUrl(self::$server->url('/redirect?tail=3000000'));
+    }
+
+    #[Test]
+    public function a_redirect_that_is_not_followed_is_an_error(): void
+    {
+        // 300, the lowest redirect status, with a body longer than the
+        // header read.
+        foreach (['300&tail=200000', '302', '304'] as $query) {
+            $code = (int) $query;
+
+            try {
+                $this->service()->fromUrl(self::$server->url("/status?code={$query}"));
+                $this->fail("HTTP {$code} must be an error.");
+            } catch (UrlAccessException $e) {
+                $this->assertStringEndsWith("(HTTP {$code})", $e->getMessage());
+            }
+        }
+    }
+
+    #[Test]
+    public function an_error_body_is_not_downloaded(): void
+    {
+        $started = microtime(true);
+
+        try {
+            // The body would take seconds to arrive.
+            $this->service()->fromUrl(self::$server->url('/status?code=400&slow'));
+            $this->fail('HTTP 400 must be an error.');
+        } catch (UrlAccessException $e) {
+            $this->assertStringEndsWith('(HTTP 400)', $e->getMessage());
+        }
+
+        $this->assertLessThan(1.0, microtime(true) - $started);
+    }
+
+    #[Test]
     public function a_redirect_to_a_host_that_is_not_allowed_is_refused(): void
     {
         $service = $this->service(['url' => ['allowed_hosts' => ['127.0.0.1']]]);

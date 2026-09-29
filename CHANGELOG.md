@@ -70,7 +70,9 @@ migration steps.
   dimensions (a PNG with a 50 MB tail costs its first ~180 KB). The download
   cap applies to the bytes received; a `Content-Length` over it only fails the
   request once the header has proved insufficient. Bodies are requested
-  without compression, so a gzip response cannot inflate past the cap.
+  without compression, so a gzip response cannot inflate past the cap. An
+  error response is abandoned once its headers arrive, and a redirect that is
+  not followed (one without a `Location`, or a 304) is an error, not an image.
 - `fromContents()`, `fromStream()` and non-local storage files are analysed
   from memory; only a raster image whose header was not enough is read on into
   a temporary file. An SVG is read no further than its own cap.
