@@ -310,7 +310,8 @@ class HeifDimensionsReaderTest extends TestCase
         $started = microtime(true);
 
         $this->assertSame(['width' => 300, 'height' => 200], HeifDimensionsReader::fromString($bytes));
-        $this->assertLessThan(1.0, microtime(true) - $started);
+        // 0.05s, 0.3s with coverage; the copying took 8s.
+        $this->assertLessThan(2.0, microtime(true) - $started);
     }
 
     /**
