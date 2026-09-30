@@ -20,9 +20,14 @@
         //   over 4 GB, and shifting it by 31 or 33 bits, or reading it one
         //   byte later, changes nothing for any smaller;
         // - splitting a viewBox into at most six parts instead of five
-        //   rejects the same values: anything past the fourth is an error.
+        //   rejects the same values: anything past the fourth is an error;
+        // - a stream is copied to a file in reads of 1 MB, or one byte more
+        //   or less, and a last read of nothing ends it all the same;
+        // - inet_ntop() of what inet_pton() made of an IPv6 address is a
+        //   string, cast or not.
         "IncrementInteger": {
             "ignoreSourceCodeByRegex": [
+                ".*StreamReader::read\\(\\$stream, min\\(1048576, \\$maxBytes - \\$written\\)\\).*",
                 ".*preg_split\\('/\\[\\\\s,\\]\\+/', \\$value, 5,.*",
                 ".*usleep\\(5000\\).*",
                 ".*StreamReader::read\\(\\$stream, \\$limit === null \\? PHP_INT_MAX : \\$limit \\+ 1 - strlen\\(\\$head\\)\\).*",
@@ -34,9 +39,20 @@
         },
         "DecrementInteger": {
             "ignoreSourceCodeByRegex": [
+                ".*StreamReader::read\\(\\$stream, min\\(1048576, \\$maxBytes - \\$written\\)\\).*",
                 ".*usleep\\(5000\\).*",
                 ".*\\$stat === false \\? 0 :.*",
                 ".*self::uint32\\(\\$data, \\$offset \\+ 8\\) << 32.*"
+            ]
+        },
+        "LessThan": {
+            "ignoreSourceCodeByRegex": [
+                ".*while \\(\\$written < \\$maxBytes\\).*"
+            ]
+        },
+        "CastString": {
+            "ignoreSourceCodeByRegex": [
+                ".*\\(string\\) inet_ntop\\(\\(string\\) inet_pton\\(\\$host\\)\\).*"
             ]
         },
         // TemporaryFileTest::a_fatal_error_does_not_leave_the_file_behind

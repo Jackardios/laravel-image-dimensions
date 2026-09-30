@@ -220,7 +220,8 @@ class StreamReadingTest extends TestCase
     {
         $jpeg = $this->jpegWithLargeMetadata(40, 30);
         $this->useInMemoryDisk('mem')->put('late.jpg', $jpeg);
-        $service = $this->service(['temp_dir' => $this->tempPath]);
+        // The SVG cap does not apply to it.
+        $service = $this->service(['temp_dir' => $this->tempPath, 'svg' => ['max_file_size' => 100000]]);
 
         $this->assertDimensions(40, 30, $service->fromStream(CountingStream::open($jpeg)));
         $this->assertDimensions(40, 30, $service->fromStorage('mem', 'late.jpg'));
@@ -256,15 +257,16 @@ class StreamReadingTest extends TestCase
     #[Test]
     public function reading_on_stops_at_the_download_cap(): void
     {
+        // A cap of more than one read of 1 MB.
         $stream = CountingStream::open(str_repeat('J', 5000000));
 
         try {
-            $this->service(['max_download_bytes' => 400000])->fromStream($stream);
+            $this->service(['max_download_bytes' => 2500000])->fromStream($stream);
             $this->fail('Expected a FileTooLargeException.');
         } catch (FileTooLargeException $e) {
-            $this->assertStringContainsString('max 400000 bytes', $e->getMessage());
+            $this->assertStringContainsString('max 2500000 bytes', $e->getMessage());
         }
 
-        $this->assertLessThanOrEqual(400001 + 8192, CountingStream::bytesRead($stream));
+        $this->assertLessThanOrEqual(2500001 + 8192, CountingStream::bytesRead($stream));
     }
 }

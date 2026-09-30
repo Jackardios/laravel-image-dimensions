@@ -810,21 +810,17 @@ class ImageDimensionsService implements ImageDimensionsContract
         }
 
         // The header was not enough (large metadata before the image data,
-        // say): read on, into a file rather than memory.
+        // say): read on, into a file rather than memory. The file is deleted
+        // once $temp goes out of scope, however this method ends.
         $temp = new TemporaryFile($this->tempDir, 'imgdim_stream_');
+        $temp->append($head);
+        $limit = $this->maxDownloadBytes;
 
-        try {
-            $temp->append($head);
-            $limit = $this->maxDownloadBytes;
+        // One byte past the cap shows that it is exceeded.
+        $temp->appendFromStream($stream, $limit === 0 ? PHP_INT_MAX : $limit + 1 - strlen($head));
+        $this->assertWithinCaps(false, $temp->bytesWritten());
 
-            // One byte past the cap shows that it is exceeded.
-            $temp->appendFromStream($stream, $limit === 0 ? PHP_INT_MAX : $limit + 1 - strlen($head));
-            $this->assertWithinCaps(false, $temp->bytesWritten());
-
-            return $this->analyzeFile($temp->path(), $label);
-        } finally {
-            $temp->delete();
-        }
+        return $this->analyzeFile($temp->path(), $label);
     }
 
     /**
