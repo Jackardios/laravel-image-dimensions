@@ -348,14 +348,16 @@ class UrlTransferTest extends TestCase
     #[Test]
     public function it_leaves_no_temporary_file_behind(): void
     {
-        // A short timeout, so the stalled body fails within a second.
-        $service = $this->service(['temp_dir' => $this->tempPath, 'http' => ['timeout' => 1]]);
-
+        $service = $this->service(['temp_dir' => $this->tempPath]);
         $service->fromUrl(self::$server->url('/png-with-tail'));
         $service->fromUrl(self::$server->url('/png'));
 
+        // A short timeout, so the stalled body fails within a second. Not for
+        // the requests above: on Windows, the single-threaded server may
+        // still be busy with a stalled route of an earlier test.
         try {
-            $service->fromUrl(self::$server->url('/slow-body'));
+            $this->service(['temp_dir' => $this->tempPath, 'http' => ['timeout' => 1]])
+                ->fromUrl(self::$server->url('/slow-body'));
         } catch (UrlAccessException) {
         }
 
