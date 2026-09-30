@@ -9,14 +9,27 @@ use Jackardios\ImageDimensions\Exceptions\TemporaryFileException;
 /**
  * A self-cleaning temporary file.
  *
- * The underlying file is created on construction and removed when the object is
- * destroyed, so callers do not need finally-blocks to avoid leaking temp files.
- * A single write handle is kept open across appends, allowing a partial read to
- * be extended with more data without reopening the file.
+ * The underlying file is created on construction and removed by delete() or
+ * when the object is destroyed. A file that cannot be removed then (still open
+ * elsewhere, which Windows does not allow) is removed at shutdown, and so is
+ * any file whose object never got destroyed because a fatal error ended the
+ * request. A single write handle is kept open across appends, allowing a
+ * partial read to be extended with more data without reopening the file.
+ *
+ * @internal
  */
 final class TemporaryFile
 {
-    private string $path = '';
+    /**
+     * Files not removed yet, keyed by path.
+     *
+     * @var array<string, true>
+     */
+    private static array $pending = [];
+
+    private static bool $shutdownRegistered = false;
+
+    private string $path;
 
     /** @var resource|null */
     private $handle;
@@ -28,30 +41,42 @@ final class TemporaryFile
      */
     public function __construct(string $directory, string $prefix = 'imgdim_')
     {
-        if (! is_dir($directory) || ! is_writable($directory)) {
-            throw TemporaryFileException::couldNotCreate();
-        }
-
-        $path = false;
-        for ($attempt = 0; $attempt < 3 && $path === false; $attempt++) {
-            $path = @tempnam($directory, $prefix);
-            if ($path === false) {
-                usleep(10000); // 10ms
+        // Neither is_writable() nor tempnam(). On Windows, is_writable() is
+        // false for a writable directory with the read-only attribute, and
+        // tempnam() keeps three characters of the prefix. Everywhere, tempnam()
+        // silently falls back to the system temp directory when it cannot
+        // create the file in the one it was given; fopen() fails instead.
+        $base = rtrim($directory, '/\\').DIRECTORY_SEPARATOR.$prefix;
+        $handle = false;
+        // Owner only from the start, as tempnam() makes it: the contents are
+        // downloads, and a chmod() afterwards leaves a window to open it.
+        $umask = umask(0077);
+        try {
+            for ($attempt = 0; $attempt < 3 && $handle === false; $attempt++) {
+                $path = $base.bin2hex(random_bytes(8));
+                // "x": create the file, never open an existing one.
+                $handle = @fopen($path, 'xb');
             }
+        } finally {
+            umask($umask);
         }
 
-        if ($path === false) {
-            throw TemporaryFileException::couldNotCreate();
-        }
-
-        $handle = @fopen($path, 'wb');
         if ($handle === false) {
-            @unlink($path);
             throw TemporaryFileException::couldNotCreate();
         }
 
         $this->path = $path;
         $this->handle = $handle;
+
+        self::$pending[$path] = true;
+        if (! self::$shutdownRegistered) {
+            self::$shutdownRegistered = true;
+            register_shutdown_function(static function (): void {
+                foreach (array_keys(self::$pending) as $pending) {
+                    @unlink($pending);
+                }
+            });
+        }
     }
 
     public function path(): string
@@ -66,13 +91,8 @@ final class TemporaryFile
 
     /**
      * Append up to $maxBytes bytes from a stream, returning the number of bytes
-     * actually written during this call. Reads in 8KB chunks and stops at EOF or
-     * once $maxBytes is reached.
-     *
-     * A stream at end-of-data is detected by feof(), so an empty read only means
-     * "nothing available right now" — the non-blocking case. Those are retried
-     * with a short backoff (~250ms total) rather than truncating on the first
-     * stall; a stream that stays silent past that budget ends the read.
+     * actually written during this call: fewer once the stream ends or stays
+     * silent (see StreamReader::read()).
      *
      * @param  resource  $stream
      *
@@ -80,44 +100,17 @@ final class TemporaryFile
      */
     public function appendFromStream($stream, int $maxBytes): int
     {
-        if ($this->handle === null) {
-            throw TemporaryFileException::couldNotWrite();
-        }
-
         $written = 0;
-        $emptyReads = 0;
-        $maxEmptyReads = 50;
 
-        while ($written < $maxBytes && ! feof($stream) && $emptyReads < $maxEmptyReads) {
-            $chunkSize = max(1, min(8192, $maxBytes - $written));
-            $chunk = @fread($stream, $chunkSize);
-
-            if ($chunk === false) {
+        while ($written < $maxBytes) {
+            $chunk = StreamReader::read($stream, min(1048576, $maxBytes - $written));
+            if ($chunk === '') {
                 break;
             }
 
-            if ($chunk === '') {
-                $emptyReads++;
-                usleep(5000);
-
-                continue;
-            }
-
-            $emptyReads = 0;
-
-            $bytes = @fwrite($this->handle, $chunk);
-            // fwrite() returns 0 (not false) when the filesystem is full or a
-            // quota is hit; a short write means the same. Either way the file
-            // would be silently truncated, so fail loudly instead.
-            if ($bytes === false || $bytes < strlen($chunk)) {
-                throw TemporaryFileException::couldNotWrite();
-            }
-
-            $written += $bytes;
-            $this->bytesWritten += $bytes;
+            $this->append($chunk);
+            $written += strlen($chunk);
         }
-
-        $this->flush();
 
         return $written;
     }
@@ -129,7 +122,7 @@ final class TemporaryFile
      */
     public function append(string $data): void
     {
-        if ($this->handle === null) {
+        if (! is_resource($this->handle)) {
             throw TemporaryFileException::couldNotWrite();
         }
 
@@ -139,28 +132,43 @@ final class TemporaryFile
         }
 
         $this->bytesWritten += $bytes;
-        $this->flush();
     }
 
     /**
-     * Flush buffered writes so the file on disk reflects everything written.
+     * Empty the file, e.g. before the body of the next response in a
+     * redirect chain is written into it.
+     *
+     * @throws TemporaryFileException
      */
-    public function flush(): void
+    public function truncate(): void
     {
-        if ($this->handle !== null) {
-            @fflush($this->handle);
+        if (! is_resource($this->handle) || ! @ftruncate($this->handle, 0) || ! @rewind($this->handle)) {
+            throw TemporaryFileException::couldNotWrite();
+        }
+
+        $this->bytesWritten = 0;
+    }
+
+    /**
+     * Close and remove the file now, rather than when the object is
+     * destroyed: callbacks handed to an HTTP client can keep it alive long
+     * after the request.
+     */
+    public function delete(): void
+    {
+        if (is_resource($this->handle)) {
+            @fclose($this->handle);
+        }
+
+        $this->handle = null;
+
+        if (@unlink($this->path) || ! file_exists($this->path)) {
+            unset(self::$pending[$this->path]);
         }
     }
 
     public function __destruct()
     {
-        if ($this->handle !== null) {
-            @fclose($this->handle);
-            $this->handle = null;
-        }
-
-        if ($this->path !== '' && file_exists($this->path)) {
-            @unlink($this->path);
-        }
+        $this->delete();
     }
 }

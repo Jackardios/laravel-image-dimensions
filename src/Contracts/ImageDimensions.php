@@ -44,13 +44,15 @@ interface ImageDimensions
     /**
      * Get image dimensions from raw binary image contents.
      *
-     * @throws TemporaryFileException
      * @throws InvalidImageException
      */
     public function fromContents(string $contents): Dimensions;
 
     /**
      * Get image dimensions from an open, readable stream resource.
+     *
+     * A seekable stream is read from its start, whatever its position, and
+     * left at the position it had. Any other stream is read from where it is.
      *
      * @param  resource  $stream
      *

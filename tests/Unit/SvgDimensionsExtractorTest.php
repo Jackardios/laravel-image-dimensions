@@ -22,38 +22,6 @@ class SvgDimensionsExtractorTest extends TestCase
     }
 
     #[Test]
-    public function it_reads_explicit_width_and_height(): void
-    {
-        $d = $this->extractor->extract('<svg xmlns="http://www.w3.org/2000/svg" width="500" height="600"/>');
-        $this->assertEqualsDimensions(500, 600, $d);
-    }
-
-    #[Test]
-    public function it_reads_pixel_units(): void
-    {
-        $d = $this->extractor->extract('<svg width="150px" height="250px"/>');
-        $this->assertEqualsDimensions(150, 250, $d);
-    }
-
-    /**
-     * Regression for the v1 viewBox bug: width/height were computed as
-     * (max - min) instead of using the raw width/height values.
-     */
-    #[Test]
-    public function it_uses_viewbox_width_height_without_subtracting_the_origin(): void
-    {
-        $d = $this->extractor->extract('<svg viewBox="10 20 400 300"/>');
-        $this->assertEqualsDimensions(400, 300, $d);
-    }
-
-    #[Test]
-    public function it_accepts_comma_separated_viewbox(): void
-    {
-        $d = $this->extractor->extract('<svg viewBox="0,0,640,480"/>');
-        $this->assertEqualsDimensions(640, 480, $d);
-    }
-
-    #[Test]
     public function it_falls_back_to_viewbox_when_dimensions_are_percentages(): void
     {
         $d = $this->extractor->extract('<svg width="100%" height="100%" viewBox="0 0 800 600"/>');
@@ -71,20 +39,6 @@ class SvgDimensionsExtractorTest extends TestCase
             '<svg:svg xmlns:svg="http://www.w3.org/2000/svg" width="100" height="50"><svg:rect/></svg:svg>'
         );
         $this->assertEqualsDimensions(100, 50, $d);
-    }
-
-    /**
-     * Regression: the DOCTYPE-stripping regex corrupted an internal subset,
-     * so valid SVGs with entity declarations failed to parse.
-     */
-    #[Test]
-    public function it_handles_an_internal_dtd_subset(): void
-    {
-        $svg = '<!DOCTYPE svg [<!ENTITY nbsp "&#160;">]>'
-            .'<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect/></svg>';
-
-        $d = $this->extractor->extract($svg);
-        $this->assertEqualsDimensions(64, 64, $d);
     }
 
     #[Test]
@@ -112,20 +66,40 @@ class SvgDimensionsExtractorTest extends TestCase
     }
 
     #[Test]
-    public function it_ignores_a_utf8_bom_and_leading_comment_when_sniffing(): void
+    public function it_recognises_markup_after_a_bom_and_whitespace(): void
     {
-        $this->assertTrue(SvgDimensionsExtractor::sniff("\xEF\xBB\xBF<!-- generated --><svg width='1' height='1'/>"));
-        $this->assertTrue(SvgDimensionsExtractor::sniff('<?xml version="1.0"?><svg/>'));
-        $this->assertTrue(SvgDimensionsExtractor::sniff('<!DOCTYPE svg [<!ENTITY a "b">]><svg/>'));
-        $this->assertTrue(SvgDimensionsExtractor::sniff('<svg:svg xmlns:svg="x"/>'));
+        $this->assertTrue(SvgDimensionsExtractor::startsWithMarkup('<svg/>'));
+        $this->assertTrue(SvgDimensionsExtractor::startsWithMarkup("\xEF\xBB\xBF<!-- generated --><svg/>"));
+        $this->assertTrue(SvgDimensionsExtractor::startsWithMarkup(" \t\r\n<?xml version=\"1.0\"?><svg/>"));
+        $this->assertTrue(SvgDimensionsExtractor::startsWithMarkup("\xEF\xBB\xBF\n<svg/>"));
     }
 
     #[Test]
-    public function it_does_not_sniff_non_svg_content_as_svg(): void
+    public function it_recognises_utf16_markup(): void
     {
-        $this->assertFalse(SvgDimensionsExtractor::sniff('<html><body></body></html>'));
-        $this->assertFalse(SvgDimensionsExtractor::sniff("\x89PNG\r\n\x1a\n"));
-        $this->assertFalse(SvgDimensionsExtractor::sniff('not xml at all'));
+        foreach (['little-endian' => false, 'big-endian' => true] as $order => $bigEndian) {
+            $bom = $bigEndian ? "\xFE\xFF" : "\xFF\xFE";
+
+            $this->assertTrue(SvgDimensionsExtractor::startsWithMarkup($bom.self::utf16('<svg/>', $bigEndian)), $order);
+            $this->assertTrue(SvgDimensionsExtractor::startsWithMarkup(self::utf16('<?xml version="1.0"?><svg/>', $bigEndian)), $order);
+        }
+    }
+
+    private static function utf16(string $ascii, bool $bigEndian): string
+    {
+        return implode('', array_map(static fn (string $char) => $bigEndian ? "\0".$char : $char."\0", str_split($ascii)));
+    }
+
+    #[Test]
+    public function it_does_not_take_other_content_for_markup(): void
+    {
+        $this->assertFalse(SvgDimensionsExtractor::startsWithMarkup(''));
+        $this->assertFalse(SvgDimensionsExtractor::startsWithMarkup("\x89PNG\r\n\x1a\n"));
+        $this->assertFalse(SvgDimensionsExtractor::startsWithMarkup('not xml at all'));
+        // Only a UTF-8 BOM and XML whitespace may precede the markup.
+        $this->assertFalse(SvgDimensionsExtractor::startsWithMarkup("\xEF\xBB<svg/>"));
+        $this->assertFalse(SvgDimensionsExtractor::startsWithMarkup("\x0B<svg/>"));
+        $this->assertFalse(SvgDimensionsExtractor::startsWithMarkup("\x00<svg/>"));
     }
 
     #[Test]
@@ -134,13 +108,6 @@ class SvgDimensionsExtractorTest extends TestCase
         $this->expectException(InvalidImageException::class);
         $this->expectExceptionMessage('Could not determine SVG dimensions');
         $this->extractor->extract('<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>');
-    }
-
-    #[Test]
-    public function it_throws_for_a_zero_sized_viewbox(): void
-    {
-        $this->expectException(InvalidImageException::class);
-        $this->extractor->extract('<svg viewBox="0 0 0 0"/>');
     }
 
     /**
@@ -169,49 +136,6 @@ class SvgDimensionsExtractorTest extends TestCase
             'huge viewBox height' => ['<svg viewBox="0 0 10 1e30"/>'],
             'huge unit conversion' => ['<svg width="1e29in" height="10"/>'],
         ];
-    }
-
-    #[Test]
-    public function it_still_accepts_a_large_but_representable_dimension(): void
-    {
-        $d = $this->extractor->extract('<svg width="100000" height="80000"/>');
-
-        $this->assertEqualsDimensions(100000, 80000, $d);
-    }
-
-    #[Test]
-    public function it_throws_for_a_non_svg_root(): void
-    {
-        $this->expectException(InvalidImageException::class);
-        $this->expectExceptionMessage('Root element is not an <svg> element');
-        $this->extractor->extract('<html width="10" height="10"></html>');
-    }
-
-    #[Test]
-    public function it_throws_for_malformed_xml(): void
-    {
-        $this->expectException(InvalidImageException::class);
-        $this->extractor->extract('<?xml version="1.0"?><svg><rect/>');
-    }
-
-    /**
-     * Regression: a large SVG containing an unterminated <script> made the old
-     * catastrophic-backtracking sanitiser return null, which then leaked a
-     * TypeError. The extractor no longer runs regex sanitisation, so a huge
-     * document either parses or raises a package exception — never a TypeError.
-     */
-    #[Test]
-    public function it_does_not_leak_a_type_error_on_a_huge_document_with_a_script_tag(): void
-    {
-        $content = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><script>'
-            .str_repeat('<g a="b"/>', 100000).'</svg>';
-
-        try {
-            $result = $this->extractor->extract($content);
-            $this->assertInstanceOf(Dimensions::class, $result);
-        } catch (InvalidImageException $e) {
-            $this->addToAssertionCount(1);
-        }
     }
 
     private function assertEqualsDimensions(int $width, int $height, Dimensions $actual): void

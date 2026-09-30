@@ -1,0 +1,75 @@
+{
+    "$schema": "vendor/infection/infection/resources/schema.json",
+    "source": {
+        "directories": ["src"]
+    },
+    "timeout": 30,
+    "logs": {
+        "text": "build/infection.log",
+        "summary": "build/infection-summary.log"
+    },
+    "mutators": {
+        "@default": true,
+        // Equivalent mutants, each on the line its regex names:
+        // - retry delays off by one change nothing observable;
+        // - "$limit + 1": reading two bytes past a cap instead of one still
+        //   shows that it is exceeded;
+        // - fstat() on an open file does not fail;
+        // - substr($packed, 12, 4) is the end of a 16-byte string either way;
+        // - a HEIF box's 64-bit size: the high word only matters for boxes
+        //   over 4 GB, and shifting it by 31 or 33 bits, or reading it one
+        //   byte later, changes nothing for any smaller;
+        // - splitting a viewBox into at most six parts instead of five
+        //   rejects the same values: anything past the fourth is an error;
+        // - a stream is copied to a file in reads of 1 MB, or one byte more
+        //   or less, and a last read of nothing ends it all the same;
+        // - inet_ntop() of what inet_pton() made of an IPv6 address is a
+        //   string, cast or not.
+        "IncrementInteger": {
+            "ignoreSourceCodeByRegex": [
+                ".*StreamReader::read\\(\\$stream, min\\(1048576, \\$maxBytes - \\$written\\)\\).*",
+                ".*preg_split\\('/\\[\\\\s,\\]\\+/', \\$value, 5,.*",
+                ".*usleep\\(5000\\).*",
+                ".*StreamReader::read\\(\\$stream, \\$limit === null \\? PHP_INT_MAX : \\$limit \\+ 1 - strlen\\(\\$head\\)\\).*",
+                ".*appendFromStream\\(\\$stream, \\$limit === 0 \\? PHP_INT_MAX : \\$limit \\+ 1 - strlen\\(\\$head\\)\\).*",
+                ".*\\$stat === false \\? 0 :.*",
+                ".*return substr\\(\\$packed, 12, 4\\).*",
+                ".*self::uint32\\(\\$data, \\$offset \\+ 8\\) << 32.*"
+            ]
+        },
+        "DecrementInteger": {
+            "ignoreSourceCodeByRegex": [
+                ".*StreamReader::read\\(\\$stream, min\\(1048576, \\$maxBytes - \\$written\\)\\).*",
+                ".*usleep\\(5000\\).*",
+                ".*\\$stat === false \\? 0 :.*",
+                ".*self::uint32\\(\\$data, \\$offset \\+ 8\\) << 32.*"
+            ]
+        },
+        "LessThan": {
+            "ignoreSourceCodeByRegex": [
+                ".*while \\(\\$written < \\$maxBytes\\).*"
+            ]
+        },
+        "CastString": {
+            "ignoreSourceCodeByRegex": [
+                ".*\\(string\\) inet_ntop\\(\\(string\\) inet_pton\\(\\$host\\)\\).*"
+            ]
+        },
+        // TemporaryFileTest::a_fatal_error_does_not_leave_the_file_behind
+        // covers the shutdown cleanup, but in a process of its own, which
+        // Infection's mutated code does not reach. Registering the function
+        // once per file instead of once in all would change nothing.
+        "FunctionCallRemoval": {
+            "ignoreSourceCodeByRegex": [
+                ".*register_shutdown_function\\(.*"
+            ]
+        },
+        "TrueValue": {
+            "ignoreSourceCodeByRegex": [
+                ".*self::\\$shutdownRegistered = true;.*"
+            ]
+        }
+    },
+    "minMsi": 100,
+    "minCoveredMsi": 100
+}

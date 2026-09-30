@@ -11,3 +11,4 @@
 /phpunit.xml        export-ignore
 /phpstan.neon.dist  export-ignore
 /pint.json          export-ignore
+/infection.json5    export-ignore
