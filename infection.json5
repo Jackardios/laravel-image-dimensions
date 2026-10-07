@@ -24,7 +24,9 @@
         // - a stream is copied to a file in reads of 1 MB, or one byte more
         //   or less, and a last read of nothing ends it all the same;
         // - inet_ntop() of what inet_pton() made of an IPv6 address is a
-        //   string, cast or not.
+        //   string, cast or not;
+        // - the brands of an `ftyp` box are four bytes apart, so one that
+        //   ends by byte 145 ends by byte 144.
         "IncrementInteger": {
             "ignoreSourceCodeByRegex": [
                 ".*StreamReader::read\\(\\$stream, min\\(1048576, \\$maxBytes - \\$written\\)\\).*",
@@ -34,7 +36,8 @@
                 ".*appendFromStream\\(\\$stream, \\$limit === 0 \\? PHP_INT_MAX : \\$limit \\+ 1 - strlen\\(\\$head\\)\\).*",
                 ".*\\$stat === false \\? 0 :.*",
                 ".*return substr\\(\\$packed, 12, 4\\).*",
-                ".*self::uint32\\(\\$data, \\$offset \\+ 8\\) << 32.*"
+                ".*self::uint32\\(\\$data, \\$offset \\+ 8\\) << 32.*",
+                ".*\\$end = min\\(\\$box\\[1\\], 144\\).*"
             ]
         },
         "DecrementInteger": {

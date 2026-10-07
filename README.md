@@ -199,14 +199,19 @@ SVGs are parsed with `libxml` using `LIBXML_NONET` (no network access) and witho
 
 The whole SVG is parsed into a DOM tree, which libxml allocates outside PHP's `memory_limit`. A tree of many small elements takes about 30 times the file size: a 10MB SVG made of `<rect>`s took 0.3 s and about 300MB of memory on PHP 8.5, while PHP counted 24MB. If you measure SVGs uploaded by users, lower `svg.max_file_size` to what they actually need.
 
+### Large files
+
+Most formats are measured from the first bytes of the file. JPEG, JPEG 2000 and IFF are a chain of segments that `getimagesize()` walks until it finds the size, to the end of the file if it has to. A file built of thousands of tiny segments therefore takes time in proportion to its size, without using more memory: about 20–30 seconds for 80MB of 4-byte JPEG segments, about 10 seconds for JPEG 2000 or IFF, and about 8 seconds for the 32MB that `max_download_bytes` allows by default. If you measure files from users, limit their size: lower `max_download_bytes` for URLs, streams and remote disks, and validate the size of uploads and local files yourself, since `fromLocal()`, `fromUploadedFile()` and `fromStorage()` on a local disk read a file of any size.
+
 ## Formats
 
 The format is recognised from the contents, never from the file name, extension or MIME type: a PNG named `logo.svg` is read as a PNG.
 
-- **Raster formats** are measured by PHP's `getimagesize()`: PNG, JPEG, GIF, WebP, BMP, and the others it knows.
+- **Raster formats** are measured by PHP's `getimagesize()`: PNG, JPEG, GIF, WebP, BMP, AVIF, TIFF, ICO, PSD, IFF and JPEG 2000. Only content that `getimagesize()` recognises as one of them by its signature reaches it: an `ftyp` file must name an AVIF brand, so an MP4 file, say, is not an image. A width or height above 2147483647 is an error, as for SVG and HEIF.
 - **HEIF/HEIC** is read by the package itself, on every PHP version, from the primary image's `ispe` size cropped by its `clap` clean aperture. PHP 8.5's `getimagesize()` reports the uncropped coded size instead (64x64 for a 33x17 photo). A download stops once the metadata has arrived.
 - **SVG** is read from `width` and `height`, in CSS absolute units, or from the `viewBox`. When only one of them is given, the other follows the `viewBox` aspect ratio, as in browsers. An explicit `0` is an error. Gzip-compressed SVG (`.svgz`) is not supported.
-- **WBMP** is not accepted. It has no signature, so almost any bytes starting with two zero bytes would pass for one.
+- **WBMP and XBM** are not accepted. They have no signature: almost any bytes starting with two zero bytes would pass for WBMP, and any text with two `#define` lines for XBM. `getimagesize()` also reads a file it takes for XBM line by line, so a large file without a line break would be read into memory whole.
+- **Flash** (`FWS`, `CWS`) is not accepted, though `getimagesize()` measures it. It is not an image, and a compressed file is inflated whole to find a size: 100KB of it can exhaust the memory limit, which is a fatal error that `try*` methods cannot turn into `null`.
 
 Dimensions are those stored in the file. Rotation is not applied: not EXIF orientation in a JPEG, and not the `irot` and `imir` properties in a HEIF image. A photo taken in portrait may therefore be reported as landscape.
 

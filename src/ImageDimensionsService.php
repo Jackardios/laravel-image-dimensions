@@ -42,6 +42,36 @@ class ImageDimensionsService implements ImageDimensionsContract
     private const IMAGETYPE_HEIF = 20;
 
     /**
+     * getimagesize() types that are never reported, see rasterDimensions().
+     */
+    private const UNMEASURED_TYPES = [IMAGETYPE_WBMP, IMAGETYPE_XBM, IMAGETYPE_SWF, IMAGETYPE_SWC];
+
+    /** The largest width or height reported: a signed 32-bit integer. */
+    private const MAX_DIMENSION = 2147483647;
+
+    /**
+     * What php_getimagetype() takes the first bytes for GIF, JPEG, PNG, PSD,
+     * BMP, JPEG 2000 (codestream and JP2), RIFF, TIFF (both byte orders), IFF
+     * and ICO by, the same from PHP 8.1 to 8.5. Bytes that start with one of
+     * these are that format to PHP, or nothing: a damaged PNG signature or
+     * RIFF that is not WebP is not tried as anything else.
+     */
+    private const SIGNATURES = [
+        'GIF',
+        "\xFF\xD8\xFF",
+        "\x89PN",
+        '8BP',
+        'BM',
+        "\xFF\x4F\xFF",
+        'RIF',
+        "II\x2A\x00",
+        "MM\x00\x2A",
+        'FORM',
+        "\x00\x00\x01\x00",
+        "\x00\x00\x00\x0CjP  \r\n\x87\n",
+    ];
+
+    /**
      * @var int<8192, 1048576>
      *
      * @internal
@@ -670,7 +700,7 @@ class ImageDimensionsService implements ImageDimensionsContract
             // SVG needs the whole document; from here on its own cap applies.
             $transfer['svg'] = true;
         } elseif (($dimensions = $this->rasterDimensions(
-            @getimagesizefromstring($head),
+            self::hasRasterSignature($head) ? @getimagesizefromstring($head) : false,
             static fn () => HeifDimensionsReader::fromString($head),
             complete: false,
         )) !== null) {
@@ -796,7 +826,7 @@ class ImageDimensionsService implements ImageDimensionsContract
         }
 
         $dimensions = $this->rasterDimensions(
-            @getimagesizefromstring($head),
+            self::hasRasterSignature($head) ? @getimagesizefromstring($head) : false,
             static fn () => HeifDimensionsReader::fromString($head),
             complete: feof($stream),
         );
@@ -892,7 +922,9 @@ class ImageDimensionsService implements ImageDimensionsContract
         }
 
         // Judged by the first kilobyte, as isMarkup() judges a header.
-        if (SvgDimensionsExtractor::startsWithMarkup((string) @file_get_contents($path, false, null, 0, 1024))) {
+        $head = (string) @file_get_contents($path, false, null, 0, 1024);
+
+        if (SvgDimensionsExtractor::startsWithMarkup($head)) {
             // Checked before the document is read.
             if ($this->svgMaxFileSize > 0 && $fileSize > $this->svgMaxFileSize) {
                 throw FileTooLargeException::forSvg($this->svgMaxFileSize);
@@ -906,7 +938,7 @@ class ImageDimensionsService implements ImageDimensionsContract
             return $this->analyzeSvg($content, $label);
         }
 
-        return $this->rasterDimensions(@getimagesize($path), static fn () => HeifDimensionsReader::fromFile($path))
+        return $this->rasterDimensions(self::hasRasterSignature($head) ? @getimagesize($path) : false, static fn () => HeifDimensionsReader::fromFile($path))
             ?? throw InvalidImageException::forPath($label, 'Could not determine image dimensions');
     }
 
@@ -925,7 +957,7 @@ class ImageDimensionsService implements ImageDimensionsContract
             return $this->analyzeSvg($contents, $label);
         }
 
-        return $this->rasterDimensions(@getimagesizefromstring($contents), static fn () => HeifDimensionsReader::fromString($contents))
+        return $this->rasterDimensions(self::hasRasterSignature($contents) ? @getimagesizefromstring($contents) : false, static fn () => HeifDimensionsReader::fromString($contents))
             ?? throw InvalidImageException::forPath($label, 'Could not determine image dimensions');
     }
 
@@ -954,13 +986,78 @@ class ImageDimensionsService implements ImageDimensionsContract
     }
 
     /**
+     * Whether the bytes start with a signature that getimagesize() itself
+     * takes for an image format it reads from the header. Nothing else may
+     * reach getimagesize(): what it does not recognise by a signature it
+     * tries as WBMP and then as XBM.
+     *
+     * - Compressed Flash (`CWS`) is inflated whole to find a size, so 100 KB
+     *   of it allocate 100 MB and exhaust the memory limit, which is a
+     *   fatal error no caller can catch; Flash (`FWS`) is not an image.
+     * - XBM is a text format read line by line: a large file without a line
+     *   break is read into memory whole, and any text with two `#define`
+     *   lines is an "image" of the size they name.
+     *
+     * @param  string  $head  The first bytes of the source, 144 or more unless it is shorter.
+     */
+    private static function hasRasterSignature(string $head): bool
+    {
+        foreach (self::SIGNATURES as $signature) {
+            if (str_starts_with($head, $signature)) {
+                return true;
+            }
+        }
+
+        // PHP takes `CWS` and `FWS` for Flash before it looks for an `ftyp` box.
+        return ! str_starts_with($head, 'CWS') && ! str_starts_with($head, 'FWS') && self::hasMeasurableFtyp($head);
+    }
+
+    /**
+     * Whether the bytes start with an `ftyp` box that getimagesize() takes
+     * for AVIF or, since PHP 8.5, for HEIF. Any other ISO media file (MP4,
+     * a made-up brand) is not recognised there and is tried as XBM.
+     *
+     * This repeats PHP's own test: a box of 16 bytes or more with `avif` or
+     * `avis` as the major brand or as one of the first 32 compatible brands
+     * inside the box. PHP 8.5 also takes a major brand of `mif1`, `heic` or
+     * `heix` for HEIF, whatever the size of the box.
+     */
+    private static function hasMeasurableFtyp(string $head): bool
+    {
+        if (substr($head, 4, 4) !== 'ftyp') {
+            return false;
+        }
+
+        $heif = defined('IMAGETYPE_HEIF') && in_array(substr($head, 8, 4), ['mif1', 'heic', 'heix'], true);
+
+        /** @var array{1: int} $box */
+        $box = unpack('N', $head);
+        if ($heif || $box[1] < 16) {
+            return $heif;
+        }
+
+        // The major brand at 8, the minor version at 12, then the brands.
+        $end = min($box[1], 144);
+        for ($offset = 8; $offset + 4 <= $end; $offset += 4) {
+            if ($offset !== 12 && in_array(substr($head, $offset, 4), ['avif', 'avis'], true)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Dimensions of a raster image from its getimagesize() result, or null
      * if it has none.
      *
-     * WBMP is rejected: it has no signature, so getimagesize() takes almost
-     * any bytes starting with two NULs for one. HEIF is read from its own
-     * metadata: getimagesize() cannot read it before PHP 8.5 and ignores the
-     * clean aperture since.
+     * WBMP and XBM are rejected: they have no signature, so getimagesize()
+     * takes almost any bytes starting with two NULs for the first and any
+     * text with two `#define` lines for the second. Flash is not an image.
+     * hasRasterSignature() already keeps all four from getimagesize(); the
+     * type is checked as well, so that a gap there cannot yield a size.
+     * HEIF is read from its own metadata: getimagesize() cannot read it
+     * before PHP 8.5 and ignores the clean aperture since.
      *
      * @param  array<int|string, mixed>|false  $size
      * @param  Closure(): (array{width: int, height: int}|null)  $readHeif
@@ -971,7 +1068,11 @@ class ImageDimensionsService implements ImageDimensionsContract
     {
         $type = $size === false ? null : ($size[2] ?? null);
 
-        if ($type !== IMAGETYPE_WBMP && $type !== self::IMAGETYPE_HEIF && ($dimensions = $this->sizeDimensions($size)) !== null) {
+        if (
+            ! in_array($type, self::UNMEASURED_TYPES, true)
+            && $type !== self::IMAGETYPE_HEIF
+            && ($dimensions = $this->sizeDimensions($size)) !== null
+        ) {
             return $dimensions;
         }
 
@@ -989,6 +1090,13 @@ class ImageDimensionsService implements ImageDimensionsContract
     private function sizeDimensions(array|false $size): ?array
     {
         if ($size === false || ! is_int($size[0] ?? null) || ! is_int($size[1] ?? null) || $size[0] <= 0 || $size[1] <= 0) {
+            return null;
+        }
+
+        // As for SVG and HEIF. A header can name any 32-bit size, such as a
+        // PNG of 4294967295x4294967295 or a BMP with a negative width, which
+        // getimagesize() reports as 4294967263.
+        if ($size[0] > self::MAX_DIMENSION || $size[1] > self::MAX_DIMENSION) {
             return null;
         }
 

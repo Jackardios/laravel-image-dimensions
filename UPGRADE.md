@@ -53,6 +53,14 @@ Every `from*` method now returns an immutable
   assert `$result->width` / `$result->height` directly.
 - Direct array mutation (`$result['width'] = 100`) now throws `LogicException`
   (the object is immutable).
+- Array functions and the spread operator throw a `TypeError`:
+  `array_merge([], $result)`, `array_key_exists('width', $result)`,
+  `count($result)`, `[...$result]`. Pass `$result->toArray()`.
+- Reading any other key, such as `$result['x']`, throws
+  `InvalidArgumentException`. On an array it was a warning and `null`.
+
+`isset($result['width'])`, `$result['width'] ?? null`, destructuring
+(`['width' => $w] = $result`), `(array) $result` and `foreach` work as before.
 
 Convenience accessors on the new object: `->width`, `->height`, `->ratio()`,
 `->isLandscape()`, `->isPortrait()`, `->isSquare()`, `->toArray()`,
@@ -138,7 +146,12 @@ Values from environment variables are no longer cast blindly:
   as a PNG; markup is always parsed as SVG.
 - HEIF/HEIC is supported on every PHP version, cropped to its clean aperture.
 - WBMP is no longer accepted: without a signature, almost any bytes starting
-  with two zero bytes passed for one.
+  with two zero bytes passed for one. Since 2.0.1 the same goes for XBM (any
+  text with two `#define` lines passed for one) and for Flash files, which
+  `getimagesize()` measures although they are not images.
+- The messages of SVG errors no longer name the file or URL: `Could not
+  determine SVG dimensions.` instead of `Could not determine SVG dimensions:
+  {path}`. Add the source yourself where you log the exception.
 - SVG: an explicit `width="0"` or `height="0"` is an error instead of falling
   back to the `viewBox`; when only one side is given, the other follows the
   `viewBox` aspect ratio.

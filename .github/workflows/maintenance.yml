@@ -1,0 +1,44 @@
+name: Maintenance branches
+
+# Scheduled workflows run only on the default branch, so the weekly run of the
+# tests never reaches the maintenance branches. This starts their own Tests
+# workflow, which has the matrix of that branch, and waits for it: a failure
+# there, or a failure to follow it, fails this run.
+on:
+  schedule:
+    # Weekly, to catch breaking releases of dependencies.
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+
+permissions:
+  # To start the workflow and to read its run.
+  actions: write
+  # `gh run watch` reads the annotations of the jobs.
+  checks: read
+
+jobs:
+  tests:
+    name: Tests - ${{ matrix.branch }}
+
+    runs-on: ubuntu-latest
+
+    # The Tests workflow waits for runners first, then runs its whole matrix.
+    timeout-minutes: 90
+
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: ['1.x']
+
+    steps:
+      - name: Run the Tests workflow of the branch and wait for it
+        run: |
+          gh workflow run tests.yml --ref "$BRANCH"
+          # The run is listed a few seconds after it is requested.
+          sleep 30
+          run_id="$(gh run list --workflow tests.yml --branch "$BRANCH" --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId')"
+          gh run watch "$run_id" --exit-status --interval 30
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BRANCH: ${{ matrix.branch }}

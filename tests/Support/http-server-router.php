@@ -89,6 +89,17 @@ switch ($path) {
         $zeros((int) ($query['tail'] ?? 0));
         break;
 
+        // A file a test wrote to its scratch directory.
+    case '/test-file':
+        $file = (string) realpath((string) ($query['path'] ?? ''));
+        if (! str_starts_with(basename(dirname($file)), 'imgdim_test_')) {
+            http_response_code(404);
+            break;
+        }
+        header('Content-Length: '.filesize($file));
+        readfile($file);
+        break;
+
     case '/png':
         header('Content-Type: image/png');
         echo $png((int) ($query['w'] ?? 10), (int) ($query['h'] ?? 10));

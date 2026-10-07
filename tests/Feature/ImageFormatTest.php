@@ -16,7 +16,8 @@ use PHPUnit\Framework\Attributes\Test;
 
 /**
  * Formats getimagesize() gets wrong: HEIF (unreadable before PHP 8.5, the
- * coded size since) and WBMP (no signature, so found in random bytes).
+ * coded size since), WBMP and XBM (no signature, so found in random bytes
+ * and in text) and Flash (not an image). And the formats it gets right.
  */
 class ImageFormatTest extends TestCase
 {
@@ -133,6 +134,155 @@ class ImageFormatTest extends TestCase
             } catch (InvalidImageException $e) {
                 $this->assertStringContainsString('Could not determine image dimensions', $e->getMessage(), $source);
             }
+        }
+    }
+
+    /**
+     * @return array<string, array{0: string, 1: int}> The bytes and the type getimagesize() takes them for.
+     */
+    public static function notAnImageProvider(): array
+    {
+        // getimagesize() reads compressed Flash only if at least 64 bytes
+        // of it follow the header, hence a body that does not compress.
+        $flashBody = "\x78\x00\x05\x5F\x00\x00\x0F\xA0\x00\x00\x0C\x01\x00".hash('sha512', 'flash', true).hash('sha512', 'body', true);
+        $flashHeader = "\x0A".pack('V', strlen($flashBody) + 8);
+        $xbm = "\n#define x_width 99999999\n#define x_height 99999999\n";
+
+        return [
+            'Flash' => ['FWS'.$flashHeader.$flashBody, IMAGETYPE_SWF],
+            'compressed Flash' => ['CWS'.$flashHeader.gzcompress($flashBody), IMAGETYPE_SWC],
+            // PHP compares the first three bytes before it looks for an ftyp box.
+            'Flash with an AVIF ftyp box' => ["FWS\x0Aftypavif\0\0\0\0mif1miaf".str_repeat("\x55", 64), IMAGETYPE_SWF],
+            'text that reads as XBM' => [$xbm, IMAGETYPE_XBM],
+            'an MP4 file that reads as XBM' => ["\0\0\0\x18ftypmp42\0\0\0\0mp42isom".$xbm, IMAGETYPE_XBM],
+            'an HEIF-like file with an AVIF brand outside the ftyp box' => ["\0\0\0\x10ftypmp42\0\0\0\0avif".$xbm, IMAGETYPE_XBM],
+        ];
+    }
+
+    #[Test]
+    #[DataProvider('notAnImageProvider')]
+    public function it_does_not_take_flash_or_text_for_an_image(string $bytes, int $type): void
+    {
+        // What the guard is for: getimagesize() does report a size here.
+        $this->assertSame($type, ((array) @getimagesizefromstring($bytes))[2] ?? null);
+
+        foreach (['local', 'contents', 'stream', 'uploaded file', 'local disk', 'other disk', 'url'] as $source) {
+            try {
+                $dimensions = $this->measure($source, $bytes, 'file.bin');
+                $this->fail("{$source}: read as {$dimensions->width}x{$dimensions->height}.");
+            } catch (InvalidImageException $e) {
+                $this->assertStringContainsString('Could not determine image dimensions', $e->getMessage(), $source);
+            }
+        }
+
+        $this->assertNull($this->service->tryFromContents($bytes));
+    }
+
+    /**
+     * Every format getimagesize() knows by a signature is still read.
+     *
+     * @return array<string, array{0: string}>
+     */
+    public static function signedFormatProvider(): array
+    {
+        $image = imagecreatetruecolor(33, 17);
+        $encode = static function (callable $write) use ($image): string {
+            ob_start();
+            $write($image);
+
+            return (string) ob_get_clean();
+        };
+
+        return [
+            'GIF' => [$encode(imagegif(...))],
+            'JPEG' => [$encode(imagejpeg(...))],
+            'PNG' => [$encode(imagepng(...))],
+            'BMP' => [$encode(imagebmp(...))],
+            'WebP' => [$encode(imagewebp(...))],
+            'PSD' => ["8BPS\x00\x01".str_repeat("\0", 6).pack('nNNnn', 3, 17, 33, 8, 3)],
+            'ICO' => ["\x00\x00\x01\x00\x01\x00".chr(33).chr(17)."\x00\x00\x01\x00\x20\x00".pack('VV', 100, 22)],
+            'TIFF, little-endian' => ["II\x2A\x00".pack('Vv', 8, 2).pack('vvVV', 256, 4, 1, 33).pack('vvVV', 257, 4, 1, 17).pack('V', 0)],
+            'TIFF, big-endian' => ["MM\x00\x2A".pack('Nn', 8, 2).pack('nnNN', 256, 4, 1, 33).pack('nnNN', 257, 4, 1, 17).pack('N', 0)],
+            'JPEG 2000 codestream' => ["\xFF\x4F\xFF\x51".pack('nnNN', 41, 0, 33, 17).str_repeat("\0", 24).pack('n', 3).str_repeat("\x07\x01\x01", 3)],
+            'JPEG 2000 (JP2)' => ["\x00\x00\x00\x0CjP  \r\n\x87\n".pack('N', 20)."ftypjp2 \0\0\0\0jp2 ".pack('N', 57).'jp2c'."\xFF\x4F\xFF\x51".pack('nnNN', 41, 0, 33, 17).str_repeat("\0", 24).pack('n', 3).str_repeat("\x07\x01\x01", 3)],
+            'IFF' => ['FORM'.pack('N', 40).'ILBMBMHD'.pack('Nnn', 20, 33, 17).str_repeat("\0", 4).chr(8).str_repeat("\0", 11)],
+        ];
+    }
+
+    /**
+     * A header can name any 32-bit size; SVG and HEIF sizes have the same limit.
+     *
+     * @return array<string, array{0: string}>
+     */
+    public static function oversizedRasterProvider(): array
+    {
+        $png = static fn (int $width, int $height): string => "\x89PNG\r\n\x1A\n".pack('N', 13).'IHDR'.pack('NN', $width, $height)."\x08\x02\x00\x00\x00".pack('N', 0);
+        $bmp = substr_replace((static function (): string {
+            ob_start();
+            imagebmp(imagecreatetruecolor(33, 17));
+
+            return (string) ob_get_clean();
+        })(), pack('V', 0xFFFFFFDF), 18, 4);
+
+        return [
+            'PNG of 4294967295x4294967295' => [$png(4294967295, 4294967295)],
+            'PNG one pixel too wide' => [$png(2147483648, 17)],
+            'PNG one pixel too high' => [$png(33, 2147483648)],
+            // getimagesize() reports 4294967263x17.
+            'BMP with a width of -33' => [$bmp],
+        ];
+    }
+
+    #[Test]
+    #[DataProvider('oversizedRasterProvider')]
+    public function it_rejects_raster_sizes_beyond_a_signed_32_bit_integer(string $bytes): void
+    {
+        $this->assertGreaterThan(2147483647, max(array_slice((array) getimagesizefromstring($bytes), 0, 2)));
+
+        foreach (['local', 'contents', 'stream', 'url'] as $source) {
+            try {
+                $dimensions = $this->measure($source, $bytes, 'file.bin');
+                $this->fail("{$source}: read as {$dimensions->width}x{$dimensions->height}.");
+            } catch (InvalidImageException $e) {
+                $this->assertStringContainsString('Could not determine image dimensions', $e->getMessage(), $source);
+            }
+        }
+    }
+
+    #[Test]
+    public function it_reads_the_largest_raster_size(): void
+    {
+        $png = "\x89PNG\r\n\x1A\n".pack('N', 13).'IHDR'.pack('NN', 2147483647, 2147483647)."\x08\x02\x00\x00\x00".pack('N', 0);
+
+        $this->assertDimensions(2147483647, 2147483647, $this->service->fromContents($png));
+    }
+
+    #[Test]
+    #[DataProvider('signedFormatProvider')]
+    public function it_reads_every_format_with_a_signature(string $bytes): void
+    {
+        foreach (['local', 'contents', 'stream', 'url'] as $source) {
+            $this->assertDimensions(33, 17, $this->measure($source, $bytes, 'file.bin'));
+        }
+    }
+
+    /**
+     * AVIF is the one `ftyp` format getimagesize() reads in every supported
+     * PHP version; the HEIF reader does not take it.
+     */
+    #[Test]
+    public function it_reads_avif(): void
+    {
+        if (! function_exists('imageavif')) {
+            $this->markTestSkipped('GD is built without AVIF support.');
+        }
+
+        ob_start();
+        imageavif(imagecreatetruecolor(33, 17));
+        $avif = (string) ob_get_clean();
+
+        foreach (['local', 'contents', 'stream', 'url'] as $source) {
+            $this->assertDimensions(33, 17, $this->measure($source, $avif, 'file.bin'));
         }
     }
 

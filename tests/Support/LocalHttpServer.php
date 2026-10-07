@@ -15,6 +15,8 @@ final class LocalHttpServer
     /** @var resource */
     private $process;
 
+    private bool $stopped = false;
+
     private function __construct(
         public readonly string $baseUrl,
         $process,
@@ -43,6 +45,10 @@ final class LocalHttpServer
         }
 
         $server = new self("http://127.0.0.1:{$port}", $process);
+        // Also when the test process dies of a fatal error, which skips
+        // tearDownAfterClass(): the server and its workers would stay behind
+        // and keep the output of the test run open.
+        register_shutdown_function($server->stop(...));
         $server->waitUntilListening($port);
 
         return $server;
@@ -55,6 +61,11 @@ final class LocalHttpServer
 
     public function stop(): void
     {
+        if ($this->stopped) {
+            return;
+        }
+        $this->stopped = true;
+
         // With PHP_CLI_SERVER_WORKERS the server forks; its workers outlive
         // a terminated parent.
         $pid = proc_get_status($this->process)['pid'];

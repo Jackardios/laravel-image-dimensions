@@ -110,7 +110,9 @@ jobs:
           coverage: none
 
       - name: Add paratest
-        run: composer require --dev --no-update --no-interaction brianium/paratest
+        # With a constraint: without one, --no-update writes the constraint of
+        # the latest release, whose PHPUnit testbench may not allow yet.
+        run: composer require --dev --no-update --no-interaction "brianium/paratest:^7.8"
 
       - name: Install dependencies
         uses: ramsey/composer-install@v4

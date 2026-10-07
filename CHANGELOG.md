@@ -5,6 +5,46 @@ All notable changes to `jackardios/laravel-image-dimensions` are documented here
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.1] - Unreleased
+
+### Security
+
+`getimagesize()` could exhaust the memory limit, which is a fatal error that
+no `catch` handles, so the `try*` methods did not return `null` either. It is
+now given only content that it recognises by a signature as GIF, JPEG, PNG,
+BMP, TIFF, ICO, PSD, IFF, JPEG 2000, WebP or AVIF (on PHP 8.5, HEIF as well).
+
+- A compressed Flash file (`CWS`) of about 100 KB was inflated to 100 MB to
+  find a size. Every source method was affected; for `fromUrl()` the file
+  fits in the first `remote_read_bytes`.
+- A large file without a line break and without a signature was read into
+  memory whole, twice its size being allocated, because `getimagesize()`
+  reads such a file as XBM, line by line. That includes a file starting with
+  an `ftyp` box of a format PHP does not measure (MP4, HEIC before PHP 8.5).
+  With a `memory_limit` of 64M, the 31 MB that `fromStream()`, `fromUrl()`
+  and `fromStorage()` on a disk that is not local download by default
+  (`max_download_bytes`) were enough; `fromLocal()`, `fromUploadedFile()` and
+  `fromStorage()` on a local disk have no size limit at all.
+
+### Changed
+
+- **BREAKING:** Flash files (`FWS`, `CWS`) and XBM images are no longer
+  measured and throw `InvalidImageException`, as WBMP has since 2.0.0. Flash
+  is not an image, and XBM has no signature: any text with two `#define`
+  lines was an XBM image of the size they name. Dimensions of such files
+  that are already in the cache are still returned until they expire
+  (`cache_ttl`); clear the cache store to drop them at once.
+- A raster image whose header names a width or height above 2147483647 throws
+  `InvalidImageException`, as SVG and HEIF already did. A PNG could report
+  4294967295x4294967295, and a BMP with a negative width 4294967263.
+
+### Documentation
+
+- README: the raster formats that are read, and why WBMP, XBM and Flash are
+  not; the time a large file can take to measure.
+- UPGRADE.md: array functions, the spread operator and unknown keys on a
+  `Dimensions` object; SVG error messages no longer name the source.
+
 ## [2.0.0] - 2026-09-30
 
 A correctness- and security-focused rewrite. See [UPGRADE.md](UPGRADE.md) for
@@ -174,6 +214,10 @@ migration steps.
   bandwidth exhaustion from oversized or non-image responses.
 - Guzzle releases with published advisories (below 7.15.2, and 8.0.0) are
   excluded.
+
+## [1.1.1] - Unreleased
+
+Maintained on the `1.x` branch; see its changelog.
 
 ## [1.1.0] - 2026-09-30
 
