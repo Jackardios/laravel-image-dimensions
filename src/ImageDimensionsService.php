@@ -16,6 +16,36 @@ use Throwable;
 
 class ImageDimensionsService
 {
+    /**
+     * What php_getimagetype() takes the first bytes for GIF, JPEG, PNG, PSD,
+     * BMP, JPEG 2000 (codestream and JP2), RIFF, TIFF (both byte orders), IFF
+     * and ICO by, the same from PHP 8.1 to 8.5. Bytes that start with one of
+     * these are that format to PHP, or nothing: a damaged PNG signature or
+     * RIFF that is not WebP is not tried as anything else.
+     */
+    private const SIGNATURES = [
+        'GIF',
+        "\xFF\xD8\xFF",
+        "\x89PN",
+        '8BP',
+        'BM',
+        "\xFF\x4F\xFF",
+        'RIF',
+        "II\x2A\x00",
+        "MM\x00\x2A",
+        'FORM',
+        "\x00\x00\x01\x00",
+        "\x00\x00\x00\x0CjP  \r\n\x87\n",
+    ];
+
+    /** The largest width or height reported: a signed 32-bit integer. */
+    private const MAX_DIMENSION = 2147483647;
+
+    /**
+     * The largest file without a signature that is handed to getimagesize().
+     */
+    private const MAX_UNSIGNED_FILE_SIZE = 8388608; // 8MB
+
     protected int $remoteReadBytes;
     protected string $tempDir;
     protected bool $enableCache;
@@ -28,7 +58,9 @@ class ImageDimensionsService
         $config = config("image-dimensions", []);
 
         $this->remoteReadBytes = max(8192, min(1048576, (int) ($config['remote_read_bytes'] ?? 131072))); // 8KB-1MB
-        $this->tempDir = $config['temp_dir'] ?? sys_get_temp_dir();
+        // Resolved here, not in the config file, where `config:cache` would
+        // fix the temp directory of the machine that built the cache.
+        $this->tempDir = ($config['temp_dir'] ?? null) ?: sys_get_temp_dir();
         $this->enableCache = (bool) ($config['enable_cache'] ?? true);
         $this->cacheTtl = max(0, (int) ($config['cache_ttl'] ?? 3600));
         $this->svgMaxFileSize = max(0, (int) ($config['svg']['max_file_size'] ?? 10485760));
@@ -283,8 +315,14 @@ class ImageDimensionsService
             return $this->getLimitedSvgDimensions($filePath, $fileSize);
         }
 
-        $size = @getimagesize($filePath);
+        $size = $this->isSafeForGetimagesize($filePath, $fileSize) ? @getimagesize($filePath) : false;
         if ($size === false) {
+            throw InvalidImageException::forPath($filePath, "Could not determine image dimensions");
+        }
+
+        // A header can name any 32-bit size, and XBM text any number, which
+        // getimagesize() reports as up to 4294967295 (a negative one too).
+        if ($size[0] > self::MAX_DIMENSION || $size[1] > self::MAX_DIMENSION) {
             throw InvalidImageException::forPath($filePath, "Could not determine image dimensions");
         }
 
@@ -305,6 +343,76 @@ class ImageDimensionsService
         }
 
         return $this->getSvgDimensions($filePath);
+    }
+
+    /**
+     * Whether getimagesize() can read the file without allocating far more
+     * memory than a header takes. Running out of memory is a fatal error
+     * that no caller can catch.
+     *
+     * - Compressed Flash (`CWS`) is inflated whole to find a size: 100 KB of
+     *   it allocate 100 MB. Flash, compressed or not (`FWS`), is not an image.
+     * - A file that getimagesize() does not recognise by a signature is tried
+     *   as WBMP and then as XBM, a text format read line by line, so a file
+     *   without a line break is read into memory whole (twice its size is
+     *   allocated). Real WBMP and XBM images are small, so such a file is
+     *   read only up to MAX_UNSIGNED_FILE_SIZE.
+     */
+    private function isSafeForGetimagesize(string $filePath, int $fileSize): bool
+    {
+        $head = (string) @file_get_contents($filePath, length: 144);
+
+        if (str_starts_with($head, 'CWS') || str_starts_with($head, 'FWS')) {
+            return false;
+        }
+
+        if ($fileSize <= self::MAX_UNSIGNED_FILE_SIZE) {
+            return true;
+        }
+
+        foreach (self::SIGNATURES as $signature) {
+            if (str_starts_with($head, $signature)) {
+                return true;
+            }
+        }
+
+        return self::hasMeasurableFtyp($head);
+    }
+
+    /**
+     * Whether the bytes start with an `ftyp` box that getimagesize() takes
+     * for AVIF or, since PHP 8.5, for HEIF. Any other ISO media file (MP4,
+     * a made-up brand) is not recognised there and is tried as XBM, like a
+     * file with no signature.
+     *
+     * This repeats PHP's own test: a box of 16 bytes or more with `avif` or
+     * `avis` as the major brand or as one of the first 32 compatible brands
+     * inside the box. PHP 8.5 also takes a major brand of `mif1`, `heic` or
+     * `heix` for HEIF, whatever the size of the box.
+     */
+    private static function hasMeasurableFtyp(string $head): bool
+    {
+        if (substr($head, 4, 4) !== 'ftyp') {
+            return false;
+        }
+
+        $heif = defined('IMAGETYPE_HEIF') && in_array(substr($head, 8, 4), ['mif1', 'heic', 'heix'], true);
+
+        /** @var array{1: int} $box */
+        $box = unpack('N', $head);
+        if ($heif || $box[1] < 16) {
+            return $heif;
+        }
+
+        // The major brand at 8, the minor version at 12, then the brands.
+        $end = min($box[1], 144);
+        for ($offset = 8; $offset + 4 <= $end; $offset += 4) {
+            if ($offset !== 12 && in_array(substr($head, $offset, 4), ['avif', 'avis'], true)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function startsWithMarkup(string $filePath): bool

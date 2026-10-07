@@ -10,6 +10,12 @@
     },
     "mutators": {
         "@default": true,
+        // getimagesize() knows HEIF since PHP 8.5, and this job runs on an
+        // earlier one, where the line that tells HEIF by its brand is false
+        // whatever is done to it.
+        "global-ignoreSourceCodeByRegex": [
+            ".*\\$heif = defined\\('IMAGETYPE_HEIF'\\).*"
+        ],
         // An equivalent mutant: removing the (float) cast in
         // SvgDimensionsExtractor::parseLength() changes nothing, because the
         // regex only lets a plain numeric string through and PHP multiplies it
@@ -19,11 +25,22 @@
                 ".*\\$pixels = \\(float\\) \\$m\\['number'\\].*"
             ]
         },
+        // The start of a file that exists and was read a moment ago is a
+        // string, cast or not.
+        "CastString": {
+            "ignoreSourceCodeByRegex": [
+                ".*\\$head = \\(string\\) @file_get_contents\\(\\$filePath, length: 144\\).*"
+            ]
+        },
         // Splitting a viewBox into at most six parts instead of five rejects
         // the same values: anything past the fourth is an error either way.
+        // The brands of an `ftyp` box are four bytes apart and looked for in
+        // the first 144 bytes: a 145th, read or allowed for, changes nothing.
         "IncrementInteger": {
             "ignoreSourceCodeByRegex": [
-                ".*preg_split\\('/\\[\\\\s,\\]\\+/', \\$value, 5,.*"
+                ".*preg_split\\('/\\[\\\\s,\\]\\+/', \\$value, 5,.*",
+                ".*\\$head = \\(string\\) @file_get_contents\\(\\$filePath, length: 144\\).*",
+                ".*\\$end = min\\(\\$box\\[1\\], 144\\).*"
             ]
         }
     },

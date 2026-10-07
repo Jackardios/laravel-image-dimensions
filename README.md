@@ -19,6 +19,7 @@ A robust and efficient Laravel package to get the dimensions (width and height) 
 
 -   PHP 8.1 – 8.5
 -   Laravel 10.x, 11.x, 12.x, or 13.x (each on the PHP versions it supports)
+-   Guzzle 7.5+ or 8.0.1+. The low minimum is for applications that cannot update Guzzle; releases below 7.15.2, and 8.0.0, have published security advisories, so install 7.15.2 or later where you can.
 
 ## Installation
 
@@ -66,6 +67,8 @@ try {
 #### From a Remote URL
 
 Provide a public URL to an image. Only `http` and `https` schemes are supported.
+
+> **Do not pass URLs from users to `fromUrl()` on 1.x.** This version requests whatever host the URL names, including private addresses, `localhost` and cloud metadata endpoints, follows redirects without checking them, and, when the first `remote_read_bytes` are not enough, downloads the whole response into memory without a size limit. Validate the URL yourself first, or use [version 2](https://github.com/Jackardios/laravel-image-dimensions), which blocks private hosts by default (`url.allow_private_hosts`, `url.allowed_hosts`) and caps the download (`max_download_bytes`). Version 2 requires PHP 8.2 and Laravel 12 or 13.
 
 ```php
 use Jackardios\ImageDimensions\Facades\ImageDimensions;
@@ -121,6 +124,17 @@ The cache key is generated based on the source type, identifier (path/URL), and 
 
 -   `remote_read_bytes`: The number of bytes to initially read from a remote source (URL or cloud storage). This allows the package to get dimensions from the image header without downloading the entire file. Default: `131072` (128KB).
 -   `http`: Standard Laravel HTTP Client options like `timeout`, `connect_timeout`, and `verify_ssl`.
+
+### Formats
+
+Raster images are measured by PHP's `getimagesize()`. Two kinds of files never reach it, and throw an `InvalidImageException`:
+
+-   Flash files (`FWS` and compressed `CWS`). They are not images, and `getimagesize()` inflates a compressed one whole to find a size, so 100KB could exhaust the memory limit.
+-   Files larger than 8MB that `getimagesize()` does not recognise by a signature, including ISO media files (`ftyp`) that are not AVIF, such as MP4. `getimagesize()` reads them as WBMP or XBM, and may read all of such a file into memory. Of a remote file, the first `remote_read_bytes` are measured before the whole of it is downloaded, and those are never that large. Smaller WBMP and XBM images are read as before, which also means that a text file of up to 8MB with two `#define` lines is measured as an XBM image.
+
+A width or height above 2147483647 is an error, whatever the format.
+
+Measuring is not always a matter of the first bytes. JPEG, JPEG 2000 and IFF are a chain of segments that `getimagesize()` walks until it finds the size, so a file built of thousands of tiny segments takes time in proportion to its size, without using more memory: about 20–30 seconds for 80MB of 4-byte JPEG segments. `fromUrl()` and `fromStorage()` download a file of any size in 1.x, so limit the size of what you measure yourself, or use 2.x and its `max_download_bytes`.
 
 ### SVG Handling
 

@@ -298,4 +298,20 @@ class ImageDimensionsServiceTest extends TestCase
         config(['image-dimensions.remote_read_bytes' => 16384]);
         $this->assertSame(16384, $read(new ImageDimensionsService));
     }
+
+    #[Test]
+    public function it_takes_the_system_temp_directory_at_run_time_unless_one_is_configured(): void
+    {
+        $read = fn (ImageDimensionsService $service): string => (fn () => $this->tempDir)->call($service);
+
+        // Not a path: `config:cache` would keep the one of the build machine.
+        $this->assertNull((require dirname(__DIR__, 2).'/config/image-dimensions.php')['temp_dir']);
+        $this->assertSame(sys_get_temp_dir(), $read(new ImageDimensionsService));
+
+        config(['image-dimensions.temp_dir' => '']);
+        $this->assertSame(sys_get_temp_dir(), $read(new ImageDimensionsService));
+
+        config(['image-dimensions.temp_dir' => $this->tempPath]);
+        $this->assertSame($this->tempPath, $read(new ImageDimensionsService));
+    }
 }
