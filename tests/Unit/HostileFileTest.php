@@ -105,6 +105,7 @@ class HostileFileTest extends TestCase
             'HEIF only as a compatible brand' => [$ftyp(24, "isom\0\0\0\0mif1heic"), false],
             'ftyp cut short' => ["\0\0\0\x18ftypavi", false],
             'ftyp one byte late' => ["\0\0\0\0\x18ftypavif\0\0\0\0avifmif1", false],
+            'a box of another type with an AVIF brand' => ["\0\0\0\x18moovavif\0\0\0\0avifmif1", false],
             'no signature' => [str_repeat("\0", 16), false],
         ];
     }
@@ -120,15 +121,22 @@ class HostileFileTest extends TestCase
         $path = $this->createLargeFile('large.bin', $start, 'A', 9);
         file_put_contents($path, "\n#define x_width 99\n#define x_height 77\n", FILE_APPEND);
 
-        $size = @getimagesize($path);
-        $this->assertSame($isSignature, $size === false, 'getimagesize() does not agree');
+        // PHP 8.1 takes a few more boxes for AVIF than later versions do.
+        $isXbm = (((array) @getimagesize($path))[2] ?? null) === IMAGETYPE_XBM;
+        if ($isSignature || PHP_VERSION_ID >= 80200) {
+            $this->assertSame($isSignature, ! $isXbm, 'getimagesize() does not agree');
+        }
 
         $hasMeasurableFtyp = new \ReflectionMethod(ImageDimensionsService::class, 'hasMeasurableFtyp');
         $this->assertSame($isSignature, $hasMeasurableFtyp->invoke(null, $start));
 
-        // Either way it is not an image: the brand is all there is of AVIF.
-        $this->expectException(InvalidImageException::class);
-        $this->service->fromLocal($path);
+        // With an AVIF brand it is no image either, but that is for PHP to say.
+        try {
+            $read = $this->service->fromLocal($path);
+        } catch (InvalidImageException) {
+            $read = null;
+        }
+        $this->assertNotSame(['width' => 99, 'height' => 77], $read);
     }
 
     /**
@@ -242,7 +250,8 @@ class HostileFileTest extends TestCase
             $formats[$format] = (string) file_get_contents($this->createImage("small.{$format}", 33, 17, $format));
         }
 
-        if (function_exists('imageavif')) {
+        // PHP 8.1 knows AVIF, but not its size.
+        if (function_exists('imageavif') && PHP_VERSION_ID >= 80200) {
             ob_start();
             imageavif(imagecreatetruecolor(33, 17));
             $avif = (string) ob_get_clean();
